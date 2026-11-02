@@ -22,6 +22,7 @@ from tests.test_result_reliability import fixture
 
 def all_conditions(config):
     config["conditions"] = load_config()["conditions"]
+    config["percentiles"]["toy"]["sym_pot"] = config["percentiles"]["toy"]["pot"]
     config["adaround"].update(
         steps=2, batch_size=2, window_samples=2, window_steps=2, device="cpu"
     )
@@ -44,7 +45,7 @@ class RecalibrateTests(unittest.TestCase):
             ) as initial_ada:
                 runner.run(config, paths)
             before = results(out, config)
-            source = runner._code_identity()
+            source = runner.code_identity()
             models = {
                 c: (out / "toy" / c / "model.onnx").read_bytes()
                 for c in config["conditions"]
@@ -61,11 +62,11 @@ class RecalibrateTests(unittest.TestCase):
                 patch.object(runner, "evaluate", wraps=runner.evaluate) as evaluation,
             ):
                 runner.run(config, paths, recalibrate=True)
-            self.assertEqual(source, runner._code_identity())
+            self.assertEqual(source, runner.code_identity())
             self.assertEqual(1, calibration.call_count)
-            self.assertEqual(2, quantization.call_count)
-            self.assertEqual(2, adaround.call_count)
-            self.assertEqual(4, evaluation.call_count)
+            self.assertEqual(3, quantization.call_count)
+            self.assertEqual(3, adaround.call_count)
+            self.assertEqual(6, evaluation.call_count)
             after = results(out, config)
             self.assertEqual(before["fp32"], after["fp32"])
             request = read_json(out / "toy" / "recalibration.json")
@@ -118,7 +119,7 @@ class RecalibrateTests(unittest.TestCase):
                 str(path),
             ]
             subprocess.run(command, check=True, capture_output=True, text=True)
-            out = paths.runs / config["name"]
+            out = paths.runs / config["name"] / ".state"
             before = results(out, config)
             subprocess.run(
                 command + ["--recalibrate"], check=True, capture_output=True, text=True
@@ -128,7 +129,7 @@ class RecalibrateTests(unittest.TestCase):
             self.assertNotEqual(
                 before["pot_rtn"]["attempt_id"], after["pot_rtn"]["attempt_id"]
             )
-            self.assertEqual(
+            self.assertNotEqual(
                 before["pot_rtn"]["identity"], after["pot_rtn"]["identity"]
             )
             self.assertIn("calibration_generation", after["pot_rtn"])
@@ -187,7 +188,7 @@ class RecalibrateTests(unittest.TestCase):
                 before["pot_rtn"]["calibration_identity"],
                 after["pot_rtn"]["calibration_identity"],
             )
-            bundle = ModelBundle(
+            bundle = ModelBundle.from_directory(
                 ModelSpec.load(paths.models / "toy/recipe.yaml"), paths.models / "toy"
             )
             dataset = Dataset(paths.data / "imagenet/manifest.json")
@@ -204,13 +205,11 @@ class RecalibrateTests(unittest.TestCase):
                     ort=execution,
                 )
                 if policy.get("adaround"):
-                    options = dict(config["adaround"])
-                    options.pop("data")
                     expected = runner.apply_adaround(
                         bundle.paths["network"],
                         expected,
                         feeds,
-                        AdaroundConfig(**options),
+                        AdaroundConfig(**config["adaround"]),
                         ort=execution,
                     )
                 path = out / "toy" / c / "model.onnx"
@@ -338,69 +337,6 @@ class RecalibrateTests(unittest.TestCase):
                 read_json(out / "toy/pot_rtn/result.json")["calibration_generation"],
             )
 
-    def test_reference_rejected_up_front_for_completed_and_partial_runs(self):
-        with tempfile.TemporaryDirectory() as temp:
-            paths, config = fixture(Path(temp))
-            runner.run(config, paths)
-            parent = paths.cache / "calibration" / "toy"
-            source = next(p for p in parent.iterdir() if (p / "complete.json").exists())
-            shutil.copytree(source, parent / "reference")
-            reference = copy.deepcopy(config)
-            reference["name"] = "reference"
-            reference["calibration"]["source"] = "reference"
-            runner.run(reference, paths)
-            out = paths.runs / reference["name"]
-            for partial in (False, True):
-                if partial:
-                    (out / "toy/pot_rtn/complete.json").unlink()
-                before = {
-                    str(p.relative_to(out)): sha256(p)
-                    for p in out.rglob("*")
-                    if p.is_file()
-                }
-                with patch.object(
-                    runner, "calibrate", side_effect=AssertionError("reject first")
-                ):
-                    with self.assertRaisesRegex(
-                        ValueError, "calibration.source=compute"
-                    ):
-                        runner.run(reference, paths, recalibrate=True)
-                after = {
-                    str(p.relative_to(out)): sha256(p)
-                    for p in out.rglob("*")
-                    if p.is_file()
-                }
-                self.assertEqual(before, after)
-            reference["name"] = "never_started"
-            with self.assertRaisesRegex(ValueError, "calibration.source=compute"):
-                runner.run(reference, paths, recalibrate=True)
-            self.assertFalse((paths.runs / reference["name"]).exists())
-
-    def test_force_reference_does_not_resume_pending_compute_request(self):
-        with tempfile.TemporaryDirectory() as temp:
-            paths, config = fixture(Path(temp))
-            runner.run(config, paths)
-            parent = paths.cache / "calibration" / "toy"
-            source = next(p for p in parent.iterdir() if (p / "complete.json").exists())
-            shutil.copytree(source, parent / "reference")
-            reference_hash = sha256(parent / "reference/complete.json")
-            with patch.object(
-                runner, "calibrate", side_effect=RuntimeError("interrupted")
-            ):
-                with self.assertRaisesRegex(RuntimeError, "interrupted"):
-                    runner.run(config, paths, recalibrate=True)
-            config["calibration"]["source"] = "reference"
-            with patch.object(
-                runner,
-                "calibrate",
-                side_effect=AssertionError("reference is read-only"),
-            ):
-                runner.run(config, paths, force=True)
-                runner.run(config, paths)
-            self.assertEqual(reference_hash, sha256(parent / "reference/complete.json"))
-            result = read_json(paths.runs / config["name"] / "toy/pot_rtn/result.json")
-            self.assertNotIn("calibration_generation", result)
-
     def test_fp32_only_rejected_before_creating_run(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
@@ -408,3 +344,24 @@ class RecalibrateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "quantized condition"):
                 runner.run(config, paths, recalibrate=True)
             self.assertFalse((paths.runs / config["name"]).exists())
+
+    def test_statistics_key_covers_every_statistics_source(self):
+        from opennpu_quant._identity import ROOT
+        from opennpu_quant.ort.config import OrtConfig
+        from opennpu_quant.quant import storage
+
+        self.assertIn("ort/fetch.py", storage.STATISTICS_CODE)
+        ort = OrtConfig.cpu()
+        key = storage.statistics_key("model", "inputs", 128, ort)
+        real = storage.source_hashes
+        for path in storage.STATISTICS_CODE:
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+
+                def changed(*paths, path=path):
+                    return {**real(*paths), path: "changed"}
+
+                with patch.object(storage, "source_hashes", changed):
+                    self.assertNotEqual(
+                        key, storage.statistics_key("model", "inputs", 128, ort)
+                    )

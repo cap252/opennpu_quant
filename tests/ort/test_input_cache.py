@@ -158,13 +158,25 @@ class InputCacheTests(unittest.TestCase):
             b = quantize(model, cache, config=q, ort=ort)
             self.assertEqual(a.model.SerializeToString(), b.model.SerializeToString())
 
-    def test_same_cache_writer_lock_excludes_a_second_writer(self):
+    def test_cache_waits_for_its_writer_without_failing(self):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
+        from threading import Event
         from opennpu_quant._locking import RunLock
 
-        with tempfile.TemporaryDirectory() as d:
+        entered = Event()
+        with tempfile.TemporaryDirectory() as d, ThreadPoolExecutor() as executor:
+
+            def open_cache():
+                entered.set()
+                return self.cache(d)
+
             with RunLock(Path(d) / "cache.lock"):
-                with self.assertRaisesRegex(RuntimeError, "Another process"):
-                    self.cache(d)
+                pending = executor.submit(open_cache)
+                self.assertTrue(entered.wait(5))
+                with self.assertRaises(TimeoutError):
+                    pending.result(timeout=0.1)
+            cache = pending.result(timeout=5)
+            self.assertEqual(4, len(list(cache())))
 
     def test_no_duck_typed_digest_trust(self):
         from opennpu_quant.quant.calibration import feed_digest
@@ -357,3 +369,100 @@ class InputCacheCliTests(unittest.TestCase):
         config = json.loads(result.stdout)["config"]
         self.assertFalse(config["calibration"]["input_cache"]["enabled"])
         self.assertTrue(config["activation_cache"]["enabled"])
+
+
+class CacheBudgetContractTests(unittest.TestCase):
+    def test_variable_cache_budget_includes_manifest_before_publication_and_reuse(self):
+        from opennpu_quant.data.variable_cache import prepare_variable_feed_cache
+        from opennpu_quant._io import sha256
+        from unittest.mock import patch
+        from opennpu_quant.data import variable_cache
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.write_text("inputs")
+            digest = sha256(source)
+
+            def verify():
+                if sha256(source) != digest:
+                    raise ValueError("source changed")
+
+            def factory():
+                yield {"x": np.ones((1, 1), np.float32)}
+                yield {"x": np.ones((1, 2), np.float32)}
+
+            args = dict(
+                identity={"source": digest}, verify_source=verify, expected_samples=2
+            )
+            cache = prepare_variable_feed_cache(
+                root / "cache", factory, max_bytes=100000, **args
+            )
+            total = sum(
+                p.stat().st_size for p in cache.directory.iterdir() if p.is_file()
+            )
+            with self.assertRaisesRegex(MemoryError, "disk budget"):
+                prepare_variable_feed_cache(
+                    root / "cache", factory, max_bytes=total - 1, **args
+                )
+            reused = prepare_variable_feed_cache(
+                root / "cache", factory, max_bytes=total, **args
+            )
+            self.assertTrue(reused.reused)
+            self.assertEqual(2, len(list(reused())))
+            original = variable_cache.atomic_json
+
+            # Valid JSON whitespace makes the final file exceed an earlier estimate.
+            def padded(path, value):
+                original(path, value)
+                with Path(path).open("ab") as stream:
+                    stream.write(b" " * 100000)
+
+            with (
+                patch.object(variable_cache, "atomic_json", padded),
+                self.assertRaisesRegex(MemoryError, "disk budget"),
+            ):
+                prepare_variable_feed_cache(
+                    root / "new", factory, max_bytes=20000, **args
+                )
+            self.assertFalse((root / "new").exists())
+            self.assertFalse(list(root.glob("new.building-*")))
+
+    def test_manifest_bytes_count_at_creation_and_reuse(self):
+        from opennpu_quant._io import sha256
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.write_text("constant inputs")
+            identity = sha256(source)
+
+            def verify():
+                if sha256(source) != identity:
+                    raise ValueError("source changed")
+
+            def factory():
+                for _ in range(1000):
+                    yield {"x": np.array([[0.25]], np.float32)}
+
+            args = dict(
+                identity={"source": identity},
+                verify_source=verify,
+                expected_samples=1000,
+            )
+            with self.assertRaisesRegex(MemoryError, "disk budget"):
+                prepare_feed_cache(root / "cache", factory, max_bytes=9000, **args)
+            self.assertFalse((root / "cache").exists())
+            cache = prepare_feed_cache(
+                root / "cache", factory, max_bytes=100000, **args
+            )
+            total = sum(
+                p.stat().st_size for p in cache.directory.iterdir() if p.is_file()
+            )
+            with self.assertRaisesRegex(MemoryError, "disk budget"):
+                prepare_feed_cache(root / "cache", factory, max_bytes=total - 1, **args)
+            self.assertTrue(
+                prepare_feed_cache(
+                    root / "cache", factory, max_bytes=total, **args
+                ).reused
+            )

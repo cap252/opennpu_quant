@@ -17,3 +17,4 @@ opennpu_quant.local.yaml
 *.zip
 .test-deps/
 .tools/
+bundle/

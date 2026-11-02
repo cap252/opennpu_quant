@@ -710,11 +710,14 @@ class Recognizer:
         )
         if equal_split:
             split_node = self.nodes[data_producer]
+            has_sizes = len(split_node.input) > 1 and bool(split_node.input[1])
             sizes = (
                 self.constants.get(split_node.input[1])
-                if len(split_node.input) > 1
+                if has_sizes
                 else self.attrs(split_node).get("split")
             )
+            if has_sizes and sizes is None:
+                return False
             equal_split = sizes is None or (len(sizes) == 2 and sizes[0] == sizes[1])
             shape = self.shapes.get(split_node.input[0])
             axis = self.attrs(split_node).get("axis", 0)
@@ -1124,4 +1127,10 @@ class Recognizer:
 
 
 def recognize(model, gate_provenance=None):
+    """Find activation regions whose internal edges must not receive Q/DQ.
+
+    Returns dict(regions, counts, excluded_gates, ambiguous, conflicts, nested_graphs,
+    nested_audits, passed). passed is False for an ambiguous pattern, conflicting
+    regions or a nested graph, and quantization then refuses the model.
+    """
     return Recognizer(model, gate_provenance).run()

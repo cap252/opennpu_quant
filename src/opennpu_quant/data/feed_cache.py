@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import numpy as np
 from .._io import atomic_json, object_hash, read_json, sha256
-from .._locking import RunLock
+from .._locking import cache_lock
 from .._feeds import feed_digest, _VerifiedFeed, _fingerprint
 
 
@@ -189,12 +189,19 @@ def prepare_feed_cache(
             "before each replay and raises if it changed; e.g. verify_source=check_source"
         )
     directory.parent.mkdir(parents=True, exist_ok=True)
-    with RunLock(directory.with_name(directory.name + ".lock")):
+    # Published input caches are immutable. Only initial construction needs a writer.
+    with cache_lock(
+        directory.with_name(directory.name + ".lock"), shared=directory.exists()
+    ):
         if directory.exists():
             cache = FeedCache(directory, identity=identity, verify_source=verify_source)
             if cache.manifest["sample_count"] != expected_samples:
                 raise ValueError("Reused calibration sample count changed")
-            if sum(entry["bytes"] for entry in cache.manifest["tensors"]) > max_bytes:
+            if (
+                sum(entry["bytes"] for entry in cache.manifest["tensors"])
+                + (directory / "manifest.json").stat().st_size
+                > max_bytes
+            ):
                 raise MemoryError("Existing calibration cache exceeds its disk budget")
             cache.reused = True
             return cache
@@ -231,6 +238,8 @@ def prepare_feed_cache(
                 np.prod(t["shape"], dtype=np.int64) * 4 * expected_samples + 4096
                 for t in tensors
             )
+            # Each ordered input digest also occupies a JSON string in the manifest.
+            estimated += expected_samples * 72 + 4096
             if estimated > max_bytes:
                 raise MemoryError("Calibration cache exceeds its disk budget")
             if shutil.disk_usage(temporary).free < estimated:
@@ -283,6 +292,12 @@ def prepare_feed_cache(
                 ).hexdigest(),
             )
             atomic_json(temporary / "manifest.json", record)
+            stored_bytes = (
+                sum(t["bytes"] for t in tensors)
+                + (temporary / "manifest.json").stat().st_size
+            )
+            if stored_bytes > max_bytes:
+                raise MemoryError("Calibration cache exceeds its disk budget")
             os.replace(temporary, directory)
             return FeedCache(directory, identity=identity, verify_source=verify_source)
         finally:

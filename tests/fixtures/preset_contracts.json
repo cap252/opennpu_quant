@@ -1,0 +1,28 @@
+{
+  "core10": {
+    "ordered_config_sha256": "a6001e53f4c4132455fe3cf0c4c5f03e50bb923a0ea9523fbcb776e17aca8e0d",
+    "models": 10,
+    "conditions": [
+      "fp32",
+      "pot_rtn",
+      "pot_adaround",
+      "float_rtn",
+      "float_adaround",
+      "sym_pot_rtn",
+      "sym_pot_adaround"
+    ]
+  },
+  "cnn30": {
+    "ordered_config_sha256": "300df1995710f19bd06447637c77bdb43bfec92e2ceacf3d1f5d036931d9e18f",
+    "models": 30,
+    "conditions": [
+      "fp32",
+      "pot_rtn",
+      "pot_adaround",
+      "float_rtn",
+      "float_adaround",
+      "sym_pot_rtn",
+      "sym_pot_adaround"
+    ]
+  }
+}

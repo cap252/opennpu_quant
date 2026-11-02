@@ -1,7 +1,11 @@
+"""ONNX Runtime sessions with the package's numerical policy (see OrtConfig)."""
+
 from .config import OrtConfig
+from .errors import runtime_errors
 
 
 def runtime(config=None):
+    """Import onnxruntime and warn (or fail with strict_versions) on an unverified version."""
     import onnxruntime as ort
 
     policy = config if config is not None else OrtConfig.cpu()
@@ -16,6 +20,10 @@ def runtime(config=None):
 
 
 def create_session(model, config, *, profile=None, optimized=None):
+    """Session for a model path or ModelProto under an OrtConfig.
+
+    Requested providers must be available and active; CUDA never silently falls back to CPU.
+    """
     ort = runtime(config)
     missing = set(config.providers) - set(ort.get_available_providers())
     if missing:
@@ -51,7 +59,8 @@ def create_session(model, config, *, profile=None, optimized=None):
 
         model = load_model(model).SerializeToString()
     argument = model if isinstance(model, bytes) else str(model)
-    result = ort.InferenceSession(argument, options, providers=providers)
+    with runtime_errors():
+        result = ort.InferenceSession(argument, options, providers=providers)
     result.disable_fallback()
     if any((p not in result.get_providers() for p in config.providers)):
         raise RuntimeError(
@@ -63,19 +72,29 @@ def create_session(model, config, *, profile=None, optimized=None):
 def environment(config):
     """Numerical profile for reuse; physical paths, UUIDs and host names are excluded."""
     import numpy, onnx
+    from .cpu_environment import cpu_environment
 
     ort = runtime(config)
     options = [
         {k: v for k, v in row if k not in ("device_id", "gpu_mem_limit")}
         for row in config.provider_options
     ]
-    return dict(
+    result = dict(
         onnxruntime=ort.__version__,
         onnx=onnx.__version__,
         numpy=numpy.__version__,
+        cpu_numerics=cpu_environment(),
         providers=list(config.providers),
         provider_options=options,
         optimization=config.optimization,
         intra_op_threads=config.intra_op_threads,
         inter_op_threads=config.inter_op_threads,
     )
+
+    if "CUDAExecutionProvider" in config.providers:
+        from .gpu_environment import gpu_environment
+
+        index = config.providers.index("CUDAExecutionProvider")
+        opts = dict(config.provider_options[index]) if config.provider_options else {}
+        result["cuda_numerics"] = gpu_environment(int(opts.get("device_id", "0")))
+    return result

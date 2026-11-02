@@ -55,9 +55,42 @@ def evaluate(model, samples, *, evaluator, ort=None, expected_samples=None, limi
     >>> assert measured.complete
     """
     ort = ort or OrtConfig.cpu()
+    _validate_counts(expected_samples, limit)
+    session = create_session(model, ort)
+    return _evaluate_stream(
+        session,
+        samples,
+        evaluator=evaluator,
+        ort=ort,
+        expected_samples=expected_samples,
+        limit=limit,
+        profile_model=model if ort.profile_samples else None,
+    )
+
+
+def _validate_counts(expected_samples, limit):
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError("limit must be positive")
-    session = create_session(model, ort)
+    if expected_samples is not None and (
+        type(expected_samples) is not int or expected_samples < 1
+    ):
+        raise ValueError("expected_samples must be a positive integer")
+
+
+def _evaluate_stream(
+    session,
+    samples,
+    *,
+    evaluator,
+    ort,
+    expected_samples=None,
+    limit=None,
+    fetch=None,
+    record=None,
+    profile_model=None,
+):
+    """Shared inference/scoring loop; replay supplies evidence I/O around each sample."""
+    _validate_counts(expected_samples, limit)
     names = [v.name for v in session.get_outputs()]
     seen = set()
     evaluator.reset()
@@ -65,20 +98,26 @@ def evaluate(model, samples, *, evaluator, ort=None, expected_samples=None, limi
     placement = None
     from itertools import islice
 
-    for sample in islice(iter(samples), limit):
+    for index, sample in enumerate(islice(iter(samples), limit)):
         if sample.sample_id in seen:
             raise ValueError("Duplicate sample: " + str(sample.sample_id))
         seen.add(sample.sample_id)
-        values = run_tensors(session, names, sample.feeds)
-        if any(not np.isfinite(v).all() for v in values):
+        values = (
+            fetch(index, sample)
+            if fetch is not None
+            else dict(zip(names, run_tensors(session, names, sample.feeds)))
+        )
+        if set(values) != set(names):
+            raise ValueError("Output names differ from the session")
+        if any(not np.isfinite(v).all() for v in values.values()):
             raise ValueError("Nonfinite prediction")
-        if placement is None and ort.profile_samples:
+        if placement is None and profile_model is not None:
             from ..ort.profile import profile_sample
 
-            placement = profile_sample(
-                model, sample.feeds, dict(zip(names, values)), ort
-            )
-        evaluator.update(dict(zip(names, values)), sample)
+            placement = profile_sample(profile_model, sample.feeds, values, ort)
+        evaluator.update(values, sample)
+        if record is not None:
+            record(index, sample, values)
     if not seen:
         raise ValueError("No evaluation samples")
     requested = (
@@ -91,12 +130,24 @@ def evaluate(model, samples, *, evaluator, ort=None, expected_samples=None, limi
     metrics = dict(evaluator.finalize())
     if any(not np.isfinite(v) for v in metrics.values()):
         raise ValueError("Nonfinite metric")
+    runtime = dict(**environment(ort), placement=placement)
+    if hasattr(evaluator, "contract"):
+        runtime["evaluation_contract"] = evaluator.contract.identity()
+    if "CUDAExecutionProvider" in ort.providers:
+        from ..ort.cuda_libs import loaded_driver_libraries, loaded_libraries
+        from ..ort.diagnostics import kernel_driver
+
+        runtime["loaded_libraries"] = loaded_libraries()
+        # Read by the inference process itself, where ORT has mapped the driver;
+        # environment diagnostics need both fields to compare CUDA results.
+        runtime["driver_libraries"] = loaded_driver_libraries()
+        runtime["kernel_driver"] = kernel_driver()
     return EvaluationResult(
         metrics,
         len(seen),
         expected_samples is not None and len(seen) == expected_samples,
         time.monotonic() - start,
-        dict(**environment(ort), placement=placement),
+        runtime,
         deepcopy(getattr(evaluator, "metric_details", {})),
         {
             key: getattr(evaluator, "metric_units", {}).get(key, "fraction")

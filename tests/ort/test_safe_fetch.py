@@ -8,7 +8,10 @@ from opennpu_quant.ort.fetch import run_tensors
 class FetchTests(unittest.TestCase):
     def test_computed_outputs_cannot_be_overridden_by_extra_feeds(self):
         session = Mock()
-        session.get_inputs.return_value = [SimpleNamespace(name="x")]
+        session.get_inputs.return_value = [
+            SimpleNamespace(name="x", type="tensor(float)", shape=[None])
+        ]
+        session.get_overridable_initializers.return_value = []
         session.run.side_effect = lambda names, feed: [feed["x"] * 2 for _ in names]
         x = np.arange(12, dtype=np.float32).reshape(3, 4).T
         y, a, b = run_tensors(session, ["y", "x", "x"], dict(x=x, y=x * 999))
@@ -24,19 +27,28 @@ class FetchTests(unittest.TestCase):
 
     def test_passthrough_only_never_runs_backend(self):
         session = Mock()
-        session.get_inputs.return_value = [SimpleNamespace(name="x")]
+        session.get_inputs.return_value = [
+            SimpleNamespace(name="x", type="tensor(float)", shape=[None])
+        ]
+        session.get_overridable_initializers.return_value = []
         x = np.array([1, 2], dtype=np.float32)
+        np.testing.assert_array_equal(x, run_tensors(session, ["x"], dict(x=x))[0])
+        session.run.assert_not_called()
+        session.get_inputs.return_value[0].shape = None
         np.testing.assert_array_equal(x, run_tensors(session, ["x"], dict(x=x))[0])
         session.run.assert_not_called()
 
     def test_missing_input_and_backend_error_are_not_hidden(self):
         session = Mock()
-        session.get_inputs.return_value = [SimpleNamespace(name="x")]
+        session.get_inputs.return_value = [
+            SimpleNamespace(name="x", type="tensor(float)", shape=[None])
+        ]
+        session.get_overridable_initializers.return_value = []
         with self.assertRaises(KeyError):
             run_tensors(session, ["x"], {})
         session.run.side_effect = RuntimeError("backend failure")
         with self.assertRaisesRegex(RuntimeError, "backend failure"):
-            run_tensors(session, ["y"], dict(x=np.ones(1)))
+            run_tensors(session, ["y"], dict(x=np.ones(1, dtype=np.float32)))
 
     def test_cpu_graph_with_passthrough_and_computed_output(self):
         from onnx import helper as h
@@ -71,9 +83,12 @@ class FetchTests(unittest.TestCase):
             )
             self.assertEqual(8, fetched.call_count)
         session = Mock()
-        session.get_inputs.return_value = [SimpleNamespace(name="x")]
+        session.get_inputs.return_value = [
+            SimpleNamespace(name="x", type="tensor(float)", shape=[None])
+        ]
+        session.get_overridable_initializers.return_value = []
         with patch("opennpu_quant.ort.fetch.run_tensors", wraps=run_tensors) as fetched:
-            adaround._run(session, ["x"], dict(x=np.ones(1)))
+            adaround._run(session, ["x"], dict(x=np.ones(1, dtype=np.float32)))
             fetched.assert_called_once()
 
 

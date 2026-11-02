@@ -114,6 +114,7 @@ class PotQuantizationTests(unittest.TestCase):
 
     def test_shared_weights_different_axes_bias_and_dynamic_matmul(self):
         config = QuantizationConfig(
+            calibration=CalibrationConfig(),
             scope="all",
             activation_symmetric=False,
             weight_granularity="per_channel",
@@ -161,6 +162,9 @@ class PotQuantizationTests(unittest.TestCase):
 
         for activation in ("float", "pot_nearest"):
             config = QuantizationConfig(
+                calibration=CalibrationConfig(),
+                scope="basic",
+                activation_symmetric=True,
                 weight_granularity="per_channel",
                 activation_scale_policy=activation,
                 weight_scale_policy="pot_mse",
@@ -247,6 +251,9 @@ class PotQuantizationTests(unittest.TestCase):
                 n.from_array(np.zeros_like(n.to_array(initializer)), initializer.name)
             )
         config = QuantizationConfig(
+            calibration=CalibrationConfig(),
+            scope="basic",
+            activation_symmetric=True,
             weight_granularity="per_channel",
             activation_scale_policy="pot_ceil",
             weight_scale_policy="pot_mse",
@@ -287,3 +294,218 @@ class PotQuantizationTests(unittest.TestCase):
                 )
             )
         )
+
+
+class StructuralInputRegressionTests(unittest.TestCase):
+    def model(self, nodes, inputs, outputs, weights=()):
+        return h.make_model(
+            h.make_graph(nodes, "regression", inputs, outputs, list(weights)),
+            opset_imports=[h.make_opsetid("", 18)],
+            ir_version=10,
+        )
+
+    def test_float_mask_features_remain_quantized(self):
+        model = self.model(
+            [
+                h.make_node("Greater", ["x", "zero"], ["positive"]),
+                h.make_node("Cast", ["positive"], ["mask"], to=1),
+                h.make_node("ReduceMean", ["mask"], ["y"], keepdims=0),
+            ],
+            [h.make_tensor_value_info("x", 1, [4])],
+            [h.make_tensor_value_info("y", 1, [])],
+            [n.from_array(np.array(0, np.float32), "zero")],
+        )
+        feed = {"x": np.array([-1, 1, 1, 1], np.float32)}
+        before = model.SerializeToString()
+        result = quantize(
+            model,
+            lambda: iter([feed]),
+            config=QuantizationConfig(scope="all", calibration=CalibrationConfig()),
+        )
+        self.assertIn(
+            "mask",
+            {
+                node.input[0]
+                for node in result.model.graph.node
+                if node.op_type == "QuantizeLinear"
+            },
+        )
+        self.assertTrue(
+            any(
+                node.op_type == "DequantizeLinear" and list(node.output) == ["y"]
+                for node in result.model.graph.node
+            )
+        )
+        actual = create_session(result.model, OrtConfig.cpu()).run(None, feed)[0]
+        np.testing.assert_array_equal(actual, np.array(0.75, np.float32))
+        self.assertEqual(before, model.SerializeToString())
+
+    def test_float_constant_of_shape_remains_a_quantized_feature(self):
+        model = self.model(
+            [
+                h.make_node("Shape", ["x"], ["shape"]),
+                h.make_node(
+                    "ConstantOfShape",
+                    ["shape"],
+                    ["c"],
+                    value=n.from_array(np.ones(1, np.float32)),
+                ),
+                h.make_node("Gemm", ["c", "w", "b"], ["y"]),
+            ],
+            [h.make_tensor_value_info("x", 1, [1, 4])],
+            [h.make_tensor_value_info("y", 1, [1, 2])],
+            [
+                n.from_array(np.ones((4, 2), np.float32), "w"),
+                n.from_array(np.zeros(2, np.float32), "b"),
+            ],
+        )
+        feed = {"x": np.ones((1, 4), np.float32)}
+        baseline = create_session(model, OrtConfig.cpu()).run(None, feed)[0]
+        for scope in ("basic", "all"):
+            with self.subTest(scope=scope):
+                result = quantize(
+                    model,
+                    lambda: iter([feed]),
+                    config=QuantizationConfig(
+                        scope=scope, calibration=CalibrationConfig()
+                    ),
+                )
+                self.assertIn(
+                    "c",
+                    {
+                        node.input[0]
+                        for node in result.model.graph.node
+                        if node.op_type == "QuantizeLinear"
+                    },
+                )
+                actual = create_session(result.model, OrtConfig.cpu()).run(None, feed)[
+                    0
+                ]
+                np.testing.assert_array_equal(actual, baseline)
+
+    def test_int64_shape_branch_stays_exact_and_features_remain_quantized(self):
+        model = self.model(
+            [
+                h.make_node("Identity", ["x"], ["features"]),
+                h.make_node("Shape", ["features"], ["shape"]),
+                h.make_node("Gather", ["shape", "reverse_axes"], ["new_shape"], axis=0),
+                h.make_node("Reshape", ["features", "new_shape"], ["y"]),
+            ],
+            [h.make_tensor_value_info("x", 1, ["height", "width"])],
+            [
+                h.make_tensor_value_info("y", 1, ["width", "height"]),
+                h.make_tensor_value_info("new_shape", 7, [2]),
+            ],
+            [n.from_array(np.array([1, 0], np.int64), "reverse_axes")],
+        )
+        feeds = [
+            {"x": np.linspace(-1, 1, h * 1000, dtype=np.float32).reshape(h, 1000)}
+            for h in (2, 3)
+        ]
+        before = model.SerializeToString()
+        result = quantize(
+            model,
+            lambda: iter(feeds),
+            config=QuantizationConfig(scope="all", calibration=CalibrationConfig()),
+        )
+        qinputs = {
+            node.input[0]
+            for node in result.model.graph.node
+            if node.op_type == "QuantizeLinear"
+        }
+        self.assertFalse(qinputs & {"shape", "new_shape", "reverse_axes"})
+        self.assertIn("features", qinputs)
+        shape = next(n for n in result.model.graph.node if n.op_type == "Shape")
+        reshape = next(n for n in result.model.graph.node if n.op_type == "Reshape")
+        self.assertEqual("features", shape.input[0])
+        self.assertEqual("new_shape", reshape.input[1])
+        self.assertNotEqual("features", reshape.input[0])
+        session = create_session(result.model, OrtConfig.cpu())
+        for feed in feeds:
+            height, width = feed["x"].shape
+            with self.subTest(height=height):
+                output, new_shape = session.run(None, feed)
+                self.assertEqual((width, height), output.shape)
+                np.testing.assert_array_equal(new_shape, [width, height])
+                self.assertEqual(np.dtype(np.int64), new_shape.dtype)
+                np.testing.assert_allclose(
+                    output, feed["x"].reshape(width, height), atol=0.02, rtol=0
+                )
+        self.assertEqual(before, model.SerializeToString())
+
+    def test_replaced_initializer_inputs_do_not_become_required(self):
+        model = toy_model()
+        model.graph.input.extend(
+            [
+                h.make_tensor_value_info("w", 1, [4, 6]),
+                h.make_tensor_value_info("b", 1, [6]),
+            ]
+        )
+        result = quantize(
+            model, feeds, config=QuantizationConfig(calibration=CalibrationConfig())
+        )
+        session = create_session(result.model, OrtConfig.cpu())
+        self.assertEqual(["x"], [v.name for v in session.get_inputs()])
+        self.assertEqual([], session.get_overridable_initializers())
+        self.assertTrue(np.isfinite(session.run(None, next(feeds()))[0]).all())
+
+    def test_vector_matmul_has_one_logical_output_channel_for_float_and_pot(self):
+        model = self.model(
+            [h.make_node("MatMul", ["x", "w"], ["y"])],
+            [h.make_tensor_value_info("x", 1, [1, 4])],
+            [h.make_tensor_value_info("y", 1, [1])],
+            [n.from_array(np.array([0.1, 0.3, -0.7, 0.9], np.float32), "w")],
+        )
+        feed = {"x": np.array([[0.2, -0.4, 0.1, 0.8]], np.float32)}
+        expected = create_session(model, OrtConfig.cpu()).run(None, feed)[0]
+        for policy in ("float", "pot_ceil", "pot_mse"):
+            with self.subTest(policy=policy):
+                result = quantize(
+                    model,
+                    lambda: iter([feed]),
+                    config=QuantizationConfig(
+                        calibration=CalibrationConfig(), weight_scale_policy=policy
+                    ),
+                )
+                verify_parameters(result.model, result.audit)
+                session = create_session(result.model, OrtConfig.cpu())
+                np.testing.assert_allclose(
+                    session.run(None, feed)[0], expected, atol=0.05, rtol=0
+                )
+                tensors = {
+                    v.name: n.to_array(v) for v in result.model.graph.initializer
+                }
+                weights = [
+                    node
+                    for node in result.model.graph.node
+                    if node.op_type == "DequantizeLinear"
+                    and node.input[0] in tensors
+                    and tensors[node.input[0]].dtype == np.int8
+                ]
+                self.assertEqual(1, len(weights))
+                self.assertEqual(1, tensors[weights[0].input[1]].size)
+
+    def test_dynamic_split_is_not_certified_as_equal_glu(self):
+        from opennpu_quant.quant.engine import infer_model, layout
+
+        model = self.model(
+            [
+                h.make_node("Split", ["x", "sizes"], ["a", "b"], axis=1),
+                h.make_node("Sigmoid", ["b"], ["gate"]),
+                h.make_node("Mul", ["a", "gate"], ["y"]),
+            ],
+            [
+                h.make_tensor_value_info("x", 1, [1, 4]),
+                h.make_tensor_value_info("sizes", 7, [2]),
+            ],
+            [h.make_tensor_value_info("y", 1, [1, 3])],
+        )
+        feed = {
+            "x": np.array([[0.2, -0.4, 0.1, 0.8]], np.float32),
+            "sizes": np.array([1, 3], np.int64),
+        }
+        self.assertEqual(
+            (1, 3), create_session(model, OrtConfig.cpu()).run(None, feed)[0].shape
+        )
+        with self.assertRaisesRegex(ValueError, "Activation audit"):
+            layout(infer_model(model), "all")
