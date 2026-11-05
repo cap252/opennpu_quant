@@ -22,8 +22,8 @@ class RunCaptureTests(unittest.TestCase):
             paths, cfg = fixture(Path(temp))
             cfg["conditions"] = {"fp32": {}}
             cfg["output"]["raw_samples"] = 1
-            result = run(cfg, paths)
-            directory = paths.runs / cfg["name"] / "toy/fp32"
+            result = run(cfg, paths, formats="csv,json,md")
+            directory = paths.runs / cfg["name"] / ".state/toy/fp32"
             raw = read_json(directory / "raw.json")
             self.assertEqual(1, raw["summary"]["samples"])
             self.assertTrue(verify_capture(directory))
@@ -38,7 +38,7 @@ class RunCaptureTests(unittest.TestCase):
             with patch(
                 "opennpu_quant.runner.evaluate", side_effect=AssertionError("rerun")
             ):
-                run(cfg, paths)
+                run(cfg, paths, formats="csv,json,md")
             target = directory / row["tensors"]
             target.write_bytes(target.read_bytes() + b"tampered")
             self.assertFalse(verify_capture(directory))
@@ -50,17 +50,17 @@ class RunCaptureTests(unittest.TestCase):
             paths, cfg = fixture(Path(temp))
             cfg["conditions"] = {"fp32": {}}
             cfg["output"].update(raw_sample_ids=["3"], raw_max_bytes=100000)
-            run(cfg, paths)
-            directory = paths.runs / cfg["name"] / "toy/fp32"
+            run(cfg, paths, formats="csv,json,md")
+            directory = paths.runs / cfg["name"] / ".state/toy/fp32"
             first = read_json(directory / "raw.json")
             self.assertEqual(["3"], [r["id"] for r in first["samples"]])
             hashes = {name: sha256(directory / name) for name in first["files"]}
-            run(cfg, paths, force=True)
+            run(cfg, paths, force=True, formats="csv,json,md")
             self.assertEqual(
                 hashes, {name: sha256(directory / name) for name in hashes}
             )
             cfg["output"]["raw_max_bytes"] = 1
-            result = run(cfg, paths)
+            result = run(cfg, paths, formats="csv,json,md")
             raw = read_json(directory / "raw.json")
             self.assertEqual(0, raw["summary"]["samples"])
             self.assertEqual(["3"], raw["summary"]["budget_skipped"])
@@ -70,8 +70,8 @@ class RunCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             paths, cfg = fixture(Path(temp))
             cfg["conditions"] = {"fp32": {}}
-            run(cfg, paths)
-            directory = paths.runs / cfg["name"] / "toy/fp32"
+            run(cfg, paths, formats="csv,json,md")
+            directory = paths.runs / cfg["name"] / ".state/toy/fp32"
             self.assertFalse((directory / "raw.json").exists())
             for options in (
                 {"raw_samples": True},
@@ -104,8 +104,8 @@ class RunCaptureTests(unittest.TestCase):
                 patch.object(ModelEvaluator, "update", interrupted),
                 self.assertRaisesRegex(RuntimeError, "interrupted"),
             ):
-                run(cfg, paths)
-            directory = paths.runs / cfg["name"] / "toy/fp32"
+                run(cfg, paths, formats="csv,json,md")
+            directory = paths.runs / cfg["name"] / ".state/toy/fp32"
             self.assertFalse((directory / "complete.json").exists())
             self.assertFalse((directory / "raw.json").exists())
             self.assertTrue(list(directory.glob(".raw-pending-*/*.npz")))
@@ -150,7 +150,7 @@ class MetadataCaptureReportTests(unittest.TestCase):
             paths, config = fixture(root)
             config["conditions"] = {"fp32": {}}
             config["output"]["raw_samples"] = 1
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             code = """import importlib.abc,json,sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self,fullname,path=None,target=None):

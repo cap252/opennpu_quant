@@ -1,6 +1,7 @@
 """Optional, bounded network input/output evidence for ordinary evaluations."""
 
 from pathlib import Path
+import json
 import tempfile
 from .._io import atomic_json, read_json, sha256
 
@@ -146,3 +147,15 @@ def verify_capture(directory):
         )
     except (ValueError, KeyError, TypeError, AttributeError, OSError):
         return False
+
+
+def tee_predictions(evaluator, stream):
+    """Make evaluator.update also write each sample's prediction as one JSON line."""
+    update = evaluator.update
+
+    def update_and_write(outputs, sample):
+        update(outputs, sample)
+        prediction = dict(id=sample.sample_id, prediction=evaluator.prediction)
+        stream.write(json.dumps(prediction) + "\n")
+
+    evaluator.update = update_and_write

@@ -163,7 +163,7 @@ class InputValidationTests(unittest.TestCase):
         folder.mkdir(parents=True)
         recipe = copy.deepcopy(ModelSpec.load("resnet18").recipe)
         recipe.update(name="local_toy", dataset="custom_data")
-        recipe["decode"]["profile"] = "current_v1"
+        recipe["decode"]["profile"] = "stable_topk_v1"
         (folder / "recipe.yaml").write_text(yaml.safe_dump(recipe))
         path = self.config_file(config)
         self.assert_error(

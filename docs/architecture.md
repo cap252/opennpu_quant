@@ -41,7 +41,7 @@ The default loop does not repeat every input for replay checks. Placement profil
 
 ## 6. Reporting
 
-Reporting verifies saved completion evidence, pairs INT8 with a compatible FP32 result, and computes recovery as `100 × INT8 / FP32`. `results.csv` includes the primary metric and other reported metrics such as top-5 and AP50. Metric details such as segmentation pixel accuracy stay in `records.json`. `settings.json` records effective settings and diagnostics. Optional formats and full/partial tables are described in [Reports](reporting.md).
+Reporting verifies saved completion evidence, pairs INT8 with a compatible FP32 result, and computes recovery as `100 × INT8 / FP32`. `results.csv` includes the primary metric and other reported metrics such as top-5 and AP50. Metric details such as segmentation pixel accuracy are kept in the JSON records that `--format json` writes as `records.json`. `settings.json` records effective settings and diagnostics. Optional formats and full/partial tables are described in [Reports](reporting.md).
 
 <a id="run-and-reproduce"></a>
 
@@ -74,13 +74,15 @@ Paths below are relative to `src/opennpu_quant/`.
 | Component | Responsibility | Main modules |
 |---|---|---|
 | Public execution | Parse settings, select input mode, lock output and publish results | `cli.py`, `public_run.py` |
+| Condition outcomes and evidence | Classify errors, store condition status and verify completed measurements for reuse and reports | `exceptions.py`, `run_storage.py`, `run_records.py` |
 | Generation | Resolve generation policies, collect statistics, create and reuse QDQ models | `configuration.py`, `runner.py`, `run_storage.py` |
 | Existing ONNX inputs | Validate catalog paths, graph roles, candidates and defaults | `evaluation_config.py` |
 | Model export | Convert pinned framework sources into an ONNX bundle | `export/` |
 | Models and data | Load graph connections, prepare images and preserve split order | `models/bundle.py`, `models/spec.py`, `data/` |
 | Quantization | Calibration, ranges, scales, QDQ and AdaRound | `quant/`, `graph/` |
 | Runtime and evaluation | Network sessions, host graphs, postprocessing and metrics | `ort/`, `models/adapter.py`, `evaluation/` |
-| Reports | Verify evidence, pair FP32/INT8 and write requested tables | `report.py`, `results.py`, `raw_report.py` |
+| Reports | Read verified measurements, pair FP32/INT8 and publish reports under output locks | `report.py`, `results.py`, `raw_report.py` |
+| Reuse identities | Build separate identities for model generation, evaluation and saved conditions | `run_identity.py` |
 
 The public [Python API](api.md) exposes calibration, quantization, AdaRound and evaluation independently.
 
@@ -95,11 +97,13 @@ The public [Python API](api.md) exposes calibration, quantization, AdaRound and 
 5. Evaluate with the shared loop and save completion evidence last. Keep an interrupted condition incomplete.
 6. Refresh reports while retaining the output lock. A later `report` command uses the same lock and needs no inference.
 
+For an evaluation config, `public_run.py` runs each condition through named steps: `_prepare_evaluation` resolves graphs, data and runtime, `_reuse_or_recover` reuses verified records or preserves invalid ones, `_evaluate_prepared` saves the result with completion evidence last, and `_record_failure` records the outcome of an exception.
+
 ### Result reuse and resume
 
 Identities cover model graphs, external weights, inputs and order, expected sample counts, runtime, profiles, implementation and relevant generation settings. `code_identity()` hashes packaged Python files. Generation and evaluation reuse are distinct, so a saved model can survive an evaluation failure. Changing evaluation settings follows the rules in [Reuse and caching](run-pipeline.md#reuse-and-caching).
 
-Completed conditions can be reused. An interrupted ordinary evaluation restarts the condition. Do not edit stored hashes to force reuse.
+Both input modes store resolved settings, condition status and completion evidence under `.state/`. Reports read the same verified condition records without importing a run driver. Completed conditions can be reused. An interrupted ordinary evaluation restarts the condition. Do not edit stored hashes to force reuse.
 
 <a id="numerical-determinism"></a>
 

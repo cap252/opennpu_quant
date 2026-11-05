@@ -30,7 +30,10 @@ def all_conditions(config):
 
 
 def results(out, config):
-    return {c: read_json(out / "toy" / c / "result.json") for c in config["conditions"]}
+    return {
+        c: read_json(out / ".state/toy" / c / "result.json")
+        for c in config["conditions"]
+    }
 
 
 class RecalibrateTests(unittest.TestCase):
@@ -43,11 +46,11 @@ class RecalibrateTests(unittest.TestCase):
             with patch.object(
                 runner, "apply_adaround", wraps=runner.apply_adaround
             ) as initial_ada:
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
             before = results(out, config)
             source = runner.code_identity()
             models = {
-                c: (out / "toy" / c / "model.onnx").read_bytes()
+                c: (out / ".state/toy" / c / "model.onnx").read_bytes()
                 for c in config["conditions"]
                 if c != "fp32"
             }
@@ -61,7 +64,7 @@ class RecalibrateTests(unittest.TestCase):
                 ) as adaround,
                 patch.object(runner, "evaluate", wraps=runner.evaluate) as evaluation,
             ):
-                runner.run(config, paths, recalibrate=True)
+                runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             self.assertEqual(source, runner.code_identity())
             self.assertEqual(1, calibration.call_count)
             self.assertEqual(3, quantization.call_count)
@@ -69,7 +72,7 @@ class RecalibrateTests(unittest.TestCase):
             self.assertEqual(6, evaluation.call_count)
             after = results(out, config)
             self.assertEqual(before["fp32"], after["fp32"])
-            request = read_json(out / "toy" / "recalibration.json")
+            request = read_json(out / ".state/toy" / "recalibration.json")
             self.assertEqual("completed", request["state"])
             for c, record in after.items():
                 if c == "fp32":
@@ -83,14 +86,17 @@ class RecalibrateTests(unittest.TestCase):
                 )
                 self.assertEqual(before[c]["metrics"], record["metrics"])
                 self.assertEqual(
-                    models[c], (out / "toy" / c / "model.onnx").read_bytes()
+                    models[c], (out / ".state/toy" / c / "model.onnx").read_bytes()
                 )
-                proof = read_json(out / "toy" / c / "complete.json")
+                proof = read_json(out / ".state/toy" / c / "complete.json")
                 self.assertEqual(request["generation"], proof["calibration_generation"])
                 self.assertEqual(
-                    sha256(out / "toy" / c / "result.json"), proof["result_sha256"]
+                    sha256(out / ".state/toy" / c / "result.json"),
+                    proof["result_sha256"],
                 )
-                onnx.checker.check_model(onnx.load(out / "toy" / c / "model.onnx"))
+                onnx.checker.check_model(
+                    onnx.load(out / ".state/toy" / c / "model.onnx")
+                )
             old_dirs = {x.kwargs["checkpoint_dir"] for x in initial_ada.call_args_list}
             new_dirs = {x.kwargs["checkpoint_dir"] for x in adaround.call_args_list}
             self.assertTrue(old_dirs.isdisjoint(new_dirs))
@@ -99,7 +105,7 @@ class RecalibrateTests(unittest.TestCase):
                 patch.object(runner, "calibrate", side_effect=AssertionError("reuse")),
                 patch.object(runner, "evaluate", side_effect=AssertionError("reuse")),
             ):
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
             self.assertEqual(after, results(out, config))
 
     def test_cli_recalibrate_on_completed_current_source(self):
@@ -119,7 +125,7 @@ class RecalibrateTests(unittest.TestCase):
                 str(path),
             ]
             subprocess.run(command, check=True, capture_output=True, text=True)
-            out = paths.runs / config["name"] / ".state"
+            out = paths.runs / config["name"]
             before = results(out, config)
             subprocess.run(
                 command + ["--recalibrate"], check=True, capture_output=True, text=True
@@ -147,11 +153,11 @@ class RecalibrateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
             all_conditions(config)
-            runner.run(config, paths)
+            runner.run(config, paths, formats="csv,json,md")
             out = paths.runs / config["name"]
             before = results(out, config)
             old_models = {
-                c: sha256(out / "toy" / c / "model.onnx")
+                c: sha256(out / ".state/toy" / c / "model.onnx")
                 for c in config["conditions"]
                 if c != "fp32"
             }
@@ -182,7 +188,7 @@ class RecalibrateTests(unittest.TestCase):
                 return stats
 
             with patch.object(runner, "calibrate", side_effect=changed):
-                runner.run(config, paths, recalibrate=True)
+                runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             after = results(out, config)
             self.assertNotEqual(
                 before["pot_rtn"]["calibration_identity"],
@@ -212,7 +218,7 @@ class RecalibrateTests(unittest.TestCase):
                         AdaroundConfig(**config["adaround"]),
                         ort=execution,
                     )
-                path = out / "toy" / c / "model.onnx"
+                path = out / ".state/toy" / c / "model.onnx"
                 self.assertNotEqual(old_models[c], sha256(path))
                 self.assertEqual(
                     expected.model.SerializeToString(),
@@ -233,7 +239,10 @@ class RecalibrateTests(unittest.TestCase):
                     ort=execution,
                     expected_samples=2,
                 )
-                self.assertEqual(values.metrics, after[c]["metrics"])
+                self.assertEqual(
+                    values.metrics,
+                    {k: v["value"] for k, v in after[c]["metrics"].items()},
+                )
                 self.assertEqual(
                     collected[0].statistics_identity, after[c]["calibration_identity"]
                 )
@@ -242,7 +251,7 @@ class RecalibrateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
             config["conditions"]["float_rtn"] = load_config()["conditions"]["float_rtn"]
-            runner.run(config, paths)
+            runner.run(config, paths, formats="csv,json,md")
             out = paths.runs / config["name"]
             before = results(out, config)
             real = runner.evaluate
@@ -257,7 +266,7 @@ class RecalibrateTests(unittest.TestCase):
 
             with patch.object(runner, "evaluate", side_effect=interrupted):
                 with self.assertRaisesRegex(RuntimeError, "second INT8"):
-                    runner.run(config, paths, recalibrate=True)
+                    runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             partial = results(out, config)
             self.assertNotEqual(
                 before["pot_rtn"]["attempt_id"], partial["pot_rtn"]["attempt_id"]
@@ -269,7 +278,7 @@ class RecalibrateTests(unittest.TestCase):
                 ),
                 patch.object(runner, "evaluate", wraps=real) as evaluation,
             ):
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
             self.assertEqual(1, evaluation.call_count)
             after = results(out, config)
             self.assertEqual(partial["pot_rtn"], after["pot_rtn"])
@@ -285,21 +294,54 @@ class RecalibrateTests(unittest.TestCase):
                 after["float_rtn"]["calibration_identity"],
             )
 
+    def test_recalibration_rebuilds_conditions_with_damaged_evidence(self):
+        for damage in ("missing", "corrupt"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                paths, config = fixture(Path(temp))
+                config["conditions"]["float_rtn"] = load_config()["conditions"][
+                    "float_rtn"
+                ]
+                config["evaluation"]["limit"] = 1
+                runner.run(config, paths, formats="csv")
+                out = paths.runs / config["name"]
+                before = results(out, config)
+                # Both INT8 conditions lose their proof. The second one is checked
+                # after the first has already collected the new statistics.
+                for condition in ("pot_rtn", "float_rtn"):
+                    proof = out / ".state/toy" / condition / "complete.json"
+                    if damage == "missing":
+                        proof.unlink()
+                    else:
+                        proof.write_text("{broken")
+                runner.run(config, paths, recalibrate=True, formats="csv")
+                after = results(out, config)
+                request = read_json(out / ".state/toy/recalibration.json")
+                self.assertEqual("completed", request["state"])
+                for condition in ("pot_rtn", "float_rtn"):
+                    self.assertEqual(
+                        request["generation"],
+                        after[condition]["calibration_generation"],
+                    )
+                    self.assertNotEqual(
+                        before[condition]["attempt_id"], after[condition]["attempt_id"]
+                    )
+                self.assertEqual(before["fp32"], after["fp32"])
+
     def test_interrupted_collection_cannot_resume_old_completed_results(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
-            runner.run(config, paths)
+            runner.run(config, paths, formats="csv,json,md")
             out = paths.runs / config["name"]
             before = results(out, config)
             with patch.object(
                 runner, "calibrate", side_effect=RuntimeError("collector interrupted")
             ):
                 with self.assertRaisesRegex(RuntimeError, "collector interrupted"):
-                    runner.run(config, paths, recalibrate=True)
+                    runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             with patch.object(
                 runner, "calibrate", wraps=runner.calibrate
             ) as calibration:
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
             self.assertEqual(1, calibration.call_count)
             after = results(out, config)
             self.assertEqual(before["fp32"], after["fp32"])
@@ -317,24 +359,26 @@ class RecalibrateTests(unittest.TestCase):
             recipe_path.write_text(yaml.safe_dump(recipe))
             config["models"].append("toy2")
             config["percentiles"]["toy2"] = dict(config["percentiles"]["toy"])
-            runner.run(config, paths)
+            runner.run(config, paths, formats="csv,json,md")
             out = paths.runs / config["name"]
-            before = read_json(out / "toy2/pot_rtn/result.json")
+            before = read_json(out / ".state/toy2/pot_rtn/result.json")
             with patch.object(
                 runner, "calibrate", side_effect=RuntimeError("first model interrupted")
             ):
                 with self.assertRaisesRegex(RuntimeError, "first model interrupted"):
-                    runner.run(config, paths, recalibrate=True)
+                    runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             with patch.object(
                 runner, "calibrate", wraps=runner.calibrate
             ) as calibration:
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
             self.assertEqual(2, calibration.call_count)
-            after = read_json(out / "toy2/pot_rtn/result.json")
+            after = read_json(out / ".state/toy2/pot_rtn/result.json")
             self.assertNotEqual(before["attempt_id"], after["attempt_id"])
             self.assertEqual(
                 after["calibration_generation"],
-                read_json(out / "toy/pot_rtn/result.json")["calibration_generation"],
+                read_json(out / ".state/toy/pot_rtn/result.json")[
+                    "calibration_generation"
+                ],
             )
 
     def test_fp32_only_rejected_before_creating_run(self):
@@ -342,7 +386,7 @@ class RecalibrateTests(unittest.TestCase):
             paths, config = fixture(Path(temp))
             config["conditions"] = {"fp32": {}}
             with self.assertRaisesRegex(ValueError, "quantized condition"):
-                runner.run(config, paths, recalibrate=True)
+                runner.run(config, paths, recalibrate=True, formats="csv,json,md")
             self.assertFalse((paths.runs / config["name"]).exists())
 
     def test_statistics_key_covers_every_statistics_source(self):

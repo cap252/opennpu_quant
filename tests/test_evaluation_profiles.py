@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import numpy as np
 from opennpu_quant.models.spec import ModelSpec
-from opennpu_quant.models.evaluation_profiles import apply_profile, identity, HISTORICAL
+from opennpu_quant.models.evaluation_profiles import apply_profile, identity
 from opennpu_quant.models.historical_yolo import candidates, restored_boxes, postprocess
 from opennpu_quant.models.decode import class_nms
 from opennpu_quant.evaluation.coco import evaluate_predictions
@@ -19,7 +19,7 @@ from tests.test_result_reliability import fixture
 
 class EvaluationProfileTests(unittest.TestCase):
     def test_yolox_keeps_outside_and_more_than_300_without_mutating_input(self):
-        recipe = apply_profile(ModelSpec.load("yolox").recipe, HISTORICAL)
+        recipe = apply_profile(ModelSpec.load("yolox").recipe, "yolox_torch_nms_v1")
         p = np.zeros((1, 350, 85), np.float32)
         p[0, :, 0] = np.arange(350) * 3 - 50
         p[0, :, 1] = 3
@@ -33,7 +33,6 @@ class EvaluationProfileTests(unittest.TestCase):
                 original_size=[10, 10], scale=[1, 1], pad=[0, 0], input_size=[640, 640]
             ),
             list(range(80)),
-            HISTORICAL,
         )
         self.assertEqual(350, len(rows))
         self.assertTrue(any(r["bbox"][0] < 0 for r in rows))
@@ -47,8 +46,8 @@ class EvaluationProfileTests(unittest.TestCase):
         meta = dict(
             original_size=[10, 10], input_size=[10, 10], pad=[0, 0], scale=[1, 1]
         )
-        old = restored_boxes(boxes, meta, "yolov7_face", HISTORICAL)
-        fixed = restored_boxes(boxes, meta, "yolov7_face", "face_all_boxes_v1")
+        old = restored_boxes(boxes, meta, "yolov7_face")
+        fixed = restored_boxes(boxes, meta, "yolov7_face", clip_all_boxes=True)
         np.testing.assert_array_equal(old[:4], [[0, 0, 10, 10]] * 4)
         np.testing.assert_array_equal(old[4:], boxes[4:])
         np.testing.assert_array_equal(fixed, [[0, 0, 10, 10]] * 6)
@@ -91,7 +90,9 @@ class EvaluationProfileTests(unittest.TestCase):
             selected[:, 6:], np.full((1, 32), 0.4, np.float32)
         )
         np.testing.assert_array_equal(p, before)
-        recipe = apply_profile(ModelSpec.load("yolov5s_seg").recipe, HISTORICAL)
+        recipe = apply_profile(
+            ModelSpec.load("yolov5s_seg").recipe, "yolov5_seg_scaled_coeff_bbox_area_v1"
+        )
         p = np.zeros((1, 1, 117), np.float32)
         p[0, 0, :4] = [5.123456, 5, 8, 8]
         p[0, 0, 4] = 1
@@ -101,7 +102,6 @@ class EvaluationProfileTests(unittest.TestCase):
             recipe,
             dict(original_size=[10, 10], input_size=[10, 10], pad=[0, 0], scale=[1, 1]),
             list(range(80)),
-            HISTORICAL,
         )
         self.assertEqual(0.12346, rows[0]["score"])
         self.assertEqual(1.123, rows[0]["bbox"][0])
@@ -182,7 +182,10 @@ class EvaluationProfileTests(unittest.TestCase):
                 )
             )
             spec = ModelSpec(
-                apply_profile(ModelSpec.load("yolov5s_seg").recipe, HISTORICAL)
+                apply_profile(
+                    ModelSpec.load("yolov5s_seg").recipe,
+                    "yolov5_seg_scaled_coeff_bbox_area_v1",
+                )
             )
             bundle = SimpleNamespace(
                 spec=spec, finish=lambda outputs, metadata: outputs
@@ -222,7 +225,7 @@ class EvaluationProfileTests(unittest.TestCase):
             bundle=SimpleNamespace(mapping={"images": "images"}),
         )
         identities = []
-        for name in (HISTORICAL, "face_all_boxes_v1"):
+        for name in ("yolov7_face_clip_first4_v1", "yolov7_face_clip_all_v1"):
             chosen = apply_profile(recipe, name)
             fake.spec = ModelSpec(chosen)
             fake.evaluation_profile = identity(chosen)
@@ -230,31 +233,35 @@ class EvaluationProfileTests(unittest.TestCase):
             identities.append((fake.preprocessing_identity, fake.evaluation_identity))
         self.assertEqual(identities[0][0], identities[1][0])
         self.assertNotEqual(identities[0][1], identities[1][1])
-        self.assertEqual(HISTORICAL, recipe["decode"]["profile"])
+        self.assertEqual("yolov7_face_clip_first4_v1", recipe["decode"]["profile"])
 
     def test_equivalent_profile_setting_restores_verified_evaluation(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, cfg = fixture(Path(temp))
             cfg["conditions"] = {"fp32": {}}
-            run(cfg, paths)
-            original = read_json(paths.runs / cfg["name"] / "toy/fp32/result.json")
-            cfg["evaluation"]["profiles"] = {"toy": "current_v1"}
+            run(cfg, paths, formats="csv,json,md")
+            original = read_json(
+                paths.runs / cfg["name"] / ".state/toy/fp32/result.json"
+            )
+            cfg["evaluation"]["profiles"] = {"toy": "stable_topk_v1"}
             with patch(
                 "opennpu_quant.runner.evaluate",
                 side_effect=AssertionError("equivalent profile rerun"),
             ):
-                run(cfg, paths)
+                run(cfg, paths, formats="csv,json,md")
             out = paths.runs / cfg["name"]
-            current = read_json(out / "toy/fp32/result.json")
+            current = read_json(out / ".state/toy/fp32/result.json")
             self.assertEqual(original["attempt_id"], current["attempt_id"])
             self.assertEqual(original["metrics"], current["metrics"])
-            archived = list((out / ".evaluations").glob("*/toy/fp32/result.json"))
+            archived = list(
+                (out / ".state/.evaluations").glob("*/toy/fp32/result.json")
+            )
             self.assertEqual(1, len(archived))
             self.assertEqual(original, read_json(archived[0]))
 
     def test_unknown_profile_and_unloaded_libraries_are_distinct(self):
         with self.assertRaisesRegex(ValueError, "not verified"):
-            apply_profile(ModelSpec.load("resnet18").recipe, HISTORICAL)
+            apply_profile(ModelSpec.load("resnet18").recipe, "yolox_torch_nms_v1")
         left = dict(libraries=[dict(name="libcudnn.so.9", sha256="a")])
         right = dict(
             libraries=[

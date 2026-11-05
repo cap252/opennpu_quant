@@ -21,7 +21,7 @@ def record(condition="fp32", value=0.8, **changes):
         model="m",
         model_name="Test Model",
         condition=condition,
-        state="evaluated",
+        state="completed",
         origin="standalone_run",
         primary_metric="top1",
         dataset="imagenet",
@@ -200,16 +200,8 @@ class ResultTests(unittest.TestCase):
             )
             self.assertEqual([base, q], read_records(p / "records.json")["records"])
             self.assertEqual(
-                4,
-                len(
-                    list(
-                        csv.DictReader(
-                            io.StringIO(
-                                (p / "metrics.csv").read_text(encoding="utf-8-sig")
-                            )
-                        )
-                    )
-                ),
+                {"results.csv", "results.tsv", "records.json", "summary.json"},
+                {f.name for f in p.iterdir() if f.is_file()},
             )
             completed = subprocess.run(
                 [
@@ -243,6 +235,78 @@ print(json.dumps(sorted({'numpy','onnx','onnxruntime','torch','tensorflow','cv2'
                 check=True,
             )
             self.assertEqual([], json.loads(checked.stdout))
+
+    def test_obsolete_metric_tables_are_preserved_and_warned_in_all_report_modes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old = "run_id,model,condition,metric,value,unit\nr,m,q,top1,0.78,fraction\n"
+            obsolete = {
+                root / "metrics.csv": old.encode("utf-8-sig"),
+                root / "metrics.tsv": old.replace(",", "\t").encode(),
+            }
+            for path, content in obsolete.items():
+                path.write_bytes(content)
+            # Standalone reports warn on every call. Run refreshes stay quiet,
+            # because a run warns once before its first refresh.
+            for refresh, profile, formats in (
+                (False, None, "csv"),
+                (False, "opennpu_raw", "tsv"),
+                (True, None, "tsv"),
+                (True, "opennpu_raw", "csv"),
+            ):
+                with self.subTest(refresh=refresh, profile=profile, formats=formats):
+                    expectation = (self.assertNoLogs if refresh else self.assertLogs)(
+                        "opennpu_quant.results", "WARNING"
+                    )
+                    with expectation as logs:
+                        export_records(
+                            [record(), record("q", 0.4)],
+                            root,
+                            formats=formats,
+                            table_profile=profile,
+                            refresh=refresh,
+                        )
+                    if not refresh:
+                        self.assertEqual(1, len(logs.records))
+                        message = logs.records[0].getMessage()
+                        for path in obsolete:
+                            self.assertIn(str(path), message)
+                        self.assertIn("not updated", message)
+                        self.assertIn("Check and remove", message)
+                    self.assertEqual(obsolete, {p: p.read_bytes() for p in obsolete})
+            rows = list(
+                csv.DictReader((root / "results.csv").open(encoding="utf-8-sig"))
+            )
+            self.assertEqual(40, float(rows[1]["int8_accuracy"]))
+            self.assertEqual(50, float(rows[1]["recovery_percent"]))
+            atomic_json(
+                root / "records.json",
+                dict(schema_version=1, records=[record(), record("q", 0.4)]),
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "opennpu_quant",
+                    "results",
+                    str(root / "records.json"),
+                    "--output",
+                    str(root),
+                    "--format",
+                    "csv",
+                    "--stdout",
+                    "csv",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("Obsolete report files are not updated:", result.stderr)
+            self.assertNotIn("Obsolete", result.stdout)
+            rows = list(csv.DictReader(io.StringIO(result.stdout)))
+            self.assertEqual(40, float(rows[1]["int8_accuracy"]))
+            self.assertEqual(obsolete, {p: p.read_bytes() for p in obsolete})
 
     def test_report_preserves_partial_denominators_and_rejects_tampering(self):
         from opennpu_quant.report import report

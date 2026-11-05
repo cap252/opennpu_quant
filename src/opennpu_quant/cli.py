@@ -12,6 +12,7 @@ import os
 import sys
 
 from . import __version__
+from .exceptions import EXPECTED_ERRORS
 
 DATASETS = (
     "imagenet",
@@ -117,13 +118,6 @@ def _add_run_options(run):
         "--device",
         help="Evaluation and AdaRound device: cuda:N or cpu. Defaults to the config (cuda:0 in general presets). Also used for calibration when calibration.device=run",
     )
-    from .models.evaluation_profiles import PROFILES
-
-    run.add_argument(
-        "--evaluation-profile",
-        choices=PROFILES,
-        help="Advanced comparison override for all selected models. Defaults match each model's final reference convention. Use evaluation.profiles in YAML for per-model comparisons",
-    )
     run.add_argument(
         "--limit",
         type=sample_limit,
@@ -188,10 +182,10 @@ def _add_run_options(run):
     )
     for name, help_text in {
         "force": "Bypass completed-result reuse and recompute selected results. Calibration caches and AdaRound checkpoints may still be reused",
-        "save-models": "Save a quantized model.onnx for each INT8 condition",
+        "save-models": "Save each INT8 condition's network.onnx under models/<model>/<condition>/",
         "save-predictions": "Save per-sample predictions for comparison and debugging to predictions.jsonl.gz",
         "strict-versions": "Fail unless ONNX Runtime is the verified version 1.20.2",
-        "dry-run": "Print effective configuration and paths without running inference",
+        "dry-run": "Check settings without inference: print the effective configuration and paths, or the preparation state of each condition of an evaluation config",
     }.items():
         run.add_argument("--" + name, action="store_true", help=help_text)
 
@@ -317,7 +311,7 @@ def build_parser():
     )
     report.add_argument(
         "run_dir",
-        help="Run folder containing settings.json and .state",
+        help="Run folder written by run, or an archived run snapshot",
     )
     _add_report_options(report)
     report.add_argument("--output", help="Report destination (default: run folder)")
@@ -381,9 +375,11 @@ def main(argv=None):
             ):
                 parser.exit(1)
     except tuple(FILESYSTEM_HINTS) as error:
-        hint = FILESYSTEM_HINTS[type(error)]
+        hint = next(
+            h for kind, h in FILESYSTEM_HINTS.items() if isinstance(error, kind)
+        )
         parser.exit(2, f"{type(error).__name__}: {error}. {hint}\n")
-    except (ValueError, RuntimeError, OSError, ImportError) as error:
+    except EXPECTED_ERRORS as error:
         parser.exit(2, f"{type(error).__name__}: {error}\n")
 
 
@@ -525,7 +521,8 @@ def _report(args):
 
 
 def _results(args):
-    from .results import export_records, read_records, tables, normalize_formats
+    from .results import read_records, tables, normalize_formats
+    from .report import _publish_report
 
     formats = normalize_formats(args.format)
     if args.format is not None and not args.output:
@@ -537,7 +534,7 @@ def _results(args):
         )
     from contextlib import nullcontext
     from pathlib import Path
-    from ._locking import report_source_lock, report_output_lock
+    from ._locking import report_source_lock
 
     source = Path(args.records_json).resolve().parent
     guard = report_source_lock(source) if args.output else nullcontext()
@@ -545,14 +542,14 @@ def _results(args):
         payload = read_records(args.records_json)
         rows = tables(payload["records"])[0]
         if args.output:
-            with report_output_lock(source, args.output):
-                export_records(
-                    payload["records"],
-                    args.output,
-                    metadata=payload.get("metadata"),
-                    formats=formats,
-                    table_profile=args.table_profile,
-                )
+            _publish_report(
+                payload["records"],
+                source,
+                args.output,
+                formats,
+                args.table_profile,
+                payload.get("metadata") or {},
+            )
         if not args.output:
             from .ort.diagnostics import warn_diagnostics
 
@@ -705,9 +702,7 @@ def _print_run_summary(result):
     widths = [max(len(line[i]) for line in lines) for i in range(len(header))]
     print("Device:", result["device"])
     execution = result.get("execution", {})
-    if execution.get("state") == "pending":
-        print("Execution: pending —", execution.get("reason", "unavailable"))
-    elif execution:
+    if execution:
         print(
             "Conditions:",
             ", ".join(
@@ -730,14 +725,26 @@ def _print_run_summary(result):
     print("\nOutput:", result["output"])
 
 
+def _apply_capture_overrides(output, args):
+    """Use the CLI capture selection in place of the selection in the config."""
+    if args.raw_samples is not None:
+        output["raw_samples"] = args.raw_samples
+        output.pop("raw_sample_ids", None)
+    if args.raw_sample_ids is not None:
+        output["raw_sample_ids"] = _names(args.raw_sample_ids)
+        if not output["raw_sample_ids"]:
+            raise ValueError("--raw-sample-ids must not be empty")
+        output.pop("raw_samples", None)
+    if args.raw_max_mib is not None:
+        output["raw_max_bytes"] = args.raw_max_mib * 1024**2
+    if args.save_predictions:
+        output["save_predictions"] = True
+
+
 def _apply_run_overrides(config, args):
     """Copy run flags into the experiment mapping; validate() checks the result."""
     if args.device:
         config["runtime"]["device"] = args.device
-    if getattr(args, "evaluation_profile", None):
-        config["evaluation"].setdefault("profiles", {}).update(
-            {model: args.evaluation_profile for model in config["models"]}
-        )
     if args.limit is not None:
         if args.limit < 1:
             raise ValueError("Positive limit required")
@@ -750,20 +757,9 @@ def _apply_run_overrides(config, args):
         }
     if args.adaround_steps is not None:
         config["adaround"]["steps"] = args.adaround_steps
-    if args.raw_samples is not None:
-        config["output"]["raw_samples"] = args.raw_samples
-        config["output"].pop("raw_sample_ids", None)
-    if args.raw_sample_ids is not None:
-        config["output"]["raw_sample_ids"] = _names(args.raw_sample_ids)
-        if not config["output"]["raw_sample_ids"]:
-            raise ValueError("--raw-sample-ids must not be empty")
-        config["output"].pop("raw_samples", None)
-    if args.raw_max_mib is not None:
-        config["output"]["raw_max_bytes"] = args.raw_max_mib * 1024**2
+    _apply_capture_overrides(config["output"], args)
     if args.save_models:
         config["output"]["save_qdq_models"] = True
-    if args.save_predictions:
-        config["output"]["save_predictions"] = True
     cache = config.setdefault("activation_cache", {})
     for value, field, unit, option in (
         (args.host_cache_gib, "host_bytes", 1024**3, "--host-cache-gib"),
@@ -811,16 +807,7 @@ def _evaluate_saved(args):
     check_device(config["runtime"].get("device", "cuda:0"), "runtime.device")
     if args.limit is not None:
         config["evaluation"]["limit"] = None if args.limit == "full" else args.limit
-    if args.evaluation_profile:
-        config["evaluation"]["profiles"] = {
-            model: args.evaluation_profile for model in config["models"]
-        }
-    for key in ("save_predictions", "raw_samples", "raw_sample_ids"):
-        value = getattr(args, key, None)
-        if value is not None and value is not False:
-            config["output"][key] = _names(value) if key == "raw_sample_ids" else value
-    if args.raw_max_mib is not None:
-        config["output"]["raw_max_bytes"] = args.raw_max_mib * 1024**2
+    _apply_capture_overrides(config["output"], args)
     settings(config["output"])
     select(config, catalog)
     progress = (

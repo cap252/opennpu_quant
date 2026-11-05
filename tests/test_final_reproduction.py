@@ -16,14 +16,13 @@ class FinalReproductionTests(unittest.TestCase):
         from opennpu_quant.evaluation.metrics import TopKClassification
         from opennpu_quant.models.adapter import ModelEvaluator
         from opennpu_quant.models.contracts import EvaluationSample
-        from opennpu_quant.models.evaluation_profiles import NUMPY_TOPK
 
         logits = {"logits": np.ones((1, 6), np.float32)}
         sample = EvaluationSample("0", {}, 5)
         default = TopKClassification()
         default.update(logits, sample)
         self.assertEqual({"top1": 0.0, "top5": 0.0}, default.finalize())
-        recipe = apply_profile(ModelSpec.load("resnet18").recipe, NUMPY_TOPK)
+        recipe = apply_profile(ModelSpec.load("resnet18").recipe, "numpy_topk_v1")
         bundle = SimpleNamespace(spec=ModelSpec(recipe), finish=lambda out, meta: out)
         evaluator = ModelEvaluator(bundle, None)
         evaluator.update(logits, sample)
@@ -34,6 +33,7 @@ class FinalReproductionTests(unittest.TestCase):
         from opennpu_quant._feeds import feed_digest
         from opennpu_quant.configuration import validate
         from opennpu_quant.runner import _ModelRun
+        from opennpu_quant import CalibrationConfig
 
         feed = {"images": np.zeros((1, 3, 2, 2), np.float32)}
         digest = hashlib.sha256(feed_digest(feed).encode()).hexdigest()
@@ -50,7 +50,7 @@ class FinalReproductionTests(unittest.TestCase):
         )
         with patch("opennpu_quant.runner.calibrate") as calibrate:
             with self.assertRaisesRegex(ValueError, "Calibration inputs differ"):
-                _ModelRun._collect_statistics(fake)
+                _ModelRun._collect_statistics(fake, CalibrationConfig())
             calibrate.assert_not_called()
         config["calibration"]["expected_samples_identity"][name] = digest
         config["calibration"]["device"] = "cpu"
@@ -58,4 +58,4 @@ class FinalReproductionTests(unittest.TestCase):
             "opennpu_quant.runner.runtime", side_effect=RuntimeError("guard accepted")
         ):
             with self.assertRaisesRegex(RuntimeError, "guard accepted"):
-                _ModelRun._collect_statistics(fake)
+                _ModelRun._collect_statistics(fake, CalibrationConfig())

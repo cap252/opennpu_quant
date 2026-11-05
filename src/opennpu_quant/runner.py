@@ -8,15 +8,15 @@ Layout of a run folder: docs/run-pipeline.md.
 import contextlib
 import gzip
 import hashlib
-import json
+import logging
 from pathlib import Path
 import shlex
 import tempfile
 import time
-from uuid import uuid4
 
 from ._feeds import feed_digest
 from ._identity import code_identity, run_config_identity
+from . import run_identity
 from ._io import atomic_json, read_json, object_hash, sha256, now
 from ._locking import run_directory_lock
 from .configuration import (
@@ -28,24 +28,36 @@ from .configuration import (
 from .models.spec import ModelSpec
 from .models.bundle import ModelBundle
 from .models.adapter import ModelEvaluator
-from .data.samples import Dataset, preprocessing_implementation
+from .data.samples import Dataset, preprocessing_implementation, validation_scope
 from .graph.model import model_identity, save_model
 from .api import calibrate, quantize, apply_adaround
 from .quant.storage import save_statistics, read_statistics, statistics_key
-from .quant.config import AdaroundConfig, CalibrationConfig
+from .quant.config import AdaroundConfig
 from .quant.adaround_cache import ActivationCacheConfig
 from .ort.session import environment, create_session
 from .evaluation.loop import evaluate
-from .report import ATTESTED_FILES, _report_locked, verify_artifacts
+from .evaluation.capture import tee_predictions
+from .report import report_from_settings_locked
+from .run_records import ATTESTED_FILES, generation_record, reusable_evaluation
 from .run_storage import (
+    archive_condition,
     archive_evaluation,
-    evaluation_changes_only,
+    can_archive_for_config_changes,
+    fail_condition,
     finish_archive,
+    finish_status,
+    guard_run,
+    link_model,
+    new_status,
     read_generated,
     restore_evaluation,
     save_generated,
-    link_model,
+    write_completed,
 )
+from .exceptions import condition_state, error_record
+
+
+logger = logging.getLogger(__name__)
 
 
 _REUSE_GUIDANCE = (
@@ -82,21 +94,13 @@ def runtime_audit(result, ort):
 
 
 def run(
-    config,
-    paths,
-    *,
-    force=False,
-    recalibrate=False,
-    formats=None,
-    table_profile=None,
-    _output=None,
-    _model_runner=None,
-    _reporter=None,
+    config, paths, *, force=False, recalibrate=False, formats=None, table_profile=None
 ):
-    """Execute configured models sequentially under one run-directory lock."""
-    from .results import normalize_formats
+    """Generate and evaluate under one run lock, preserving saved models."""
+    from .results import normalize_formats, warn_obsolete_reports
+    from .data.lfw_protocol import require_full
 
-    formats = normalize_formats(formats)
+    formats = normalize_formats("csv" if formats is None else formats)
     if table_profile is not None:
         from .raw_report import validate_profile
 
@@ -104,51 +108,65 @@ def run(
     validate(config, models_dir=paths.models)
     if recalibrate and not any(config["conditions"].values()):
         raise ValueError("--recalibrate requires a quantized condition")
-    from .data.lfw_protocol import require_full
-
-    # validate() has already rejected a partial LFW limit; check the manifest here.
+    definitions, conditions, specs = {}, {}, {}
     for name in config["models"]:
-        local = paths.models / name / "recipe.yaml"
-        spec = ModelSpec.load(local if local.is_file() else name)
+        spec = specs[name] = ModelSpec.for_run(
+            name,
+            paths.models / name,
+            profile=config["evaluation"].get("profiles", {}).get(name),
+        )
         if spec.recipe["task"] == "face_verification":
             require_full(
                 read_json(paths.data / spec.recipe["dataset"] / "manifest.json")
             )
-    out = Path(_output) if _output is not None else paths.runs / config["name"]
-    refresh = _reporter or _refresh_reports
-    ort = runtime(config)
-    code = code_identity()
-    with run_directory_lock(out, fixed=False):
+        definitions[name] = dict(
+            recipe=spec.recipe,
+            source_directory=str((paths.models / name).resolve()),
+            generated_directory="models/" + name,
+        )
+        conditions[name] = {}
+        for condition, policy in config["conditions"].items():
+            scheme = scheme_for_condition(config, name, condition)
+            conditions[name][condition] = dict(
+                scheme=scheme.to_dict() if scheme else None,
+                adaround=config["adaround"] if policy.get("adaround") else None,
+            )
+    root = paths.runs / config["name"]
+    out = root / ".state"
+    ort, code = runtime(config), code_identity()
+    with run_directory_lock(root, fixed=False):
+        guard_run(root, "generate")
         finish_archive(out)
-        recorded = out / "effective_config.json"
+        recorded = out / "settings.json"
         if recorded.exists():
-            previous = read_json(recorded)
+            previous = read_json(recorded)["config"]
             if run_config_identity(previous) != run_config_identity(config):
                 changed = _config_changes(previous, config)
-                if not force and not evaluation_changes_only(changed):
+                if not force and not can_archive_for_config_changes(changed):
                     detail = ", ".join(changed[:10])
                     if len(changed) > 10:
                         detail += f" (+{len(changed) - 10} more)"
                     raise ValueError(
-                        f"Run configuration changed. Changed keys: {detail}. "
+                        "Run configuration changed. Changed keys: "
+                        + detail
+                        + ". "
                         + _REUSE_GUIDANCE
                     )
                 archive_evaluation(out, previous)
-        atomic_json(out / "effective_config.json", config)
-        status = dict(
-            state="running",
-            attempt_id=uuid4().hex,
-            started=now(),
-            finished=None,
-            models={
-                name: dict(
-                    state="pending",
-                    conditions={c: {"state": "pending"} for c in config["conditions"]},
-                )
-                for name in config["models"]
-            },
+        atomic_json(
+            recorded,
+            dict(
+                schema_version=2,
+                mode="generate",
+                config=config,
+                source_identity=code,
+                models=definitions,
+                conditions=conditions,
+            ),
         )
+        status = new_status(conditions, config)
         atomic_json(out / "status.json", status)
+        warn_obsolete_reports(root)
         try:
             if recalibrate:
                 for name in config["models"]:
@@ -159,45 +177,45 @@ def run(
             for name in config["models"]:
                 status["models"][name]["state"] = "running"
                 atomic_json(out / "status.json", status)
-                if _model_runner is None:
-                    _run_model(name, config, paths, out, ort, code, force, status)
-                else:
-                    _model_runner(name, config, paths, out, ort, code, status).run(
-                        force
-                    )
+                _run_model(
+                    name, config, paths, out, ort, code, force, status, spec=specs[name]
+                )
                 status["models"][name]["state"] = "completed"
                 atomic_json(out / "status.json", status)
-                refresh(out, formats, table_profile)
+                _refresh_reports(root, formats, table_profile)
         except BaseException as error:
-            status["state"] = (
-                "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
+            status.update(
+                state=condition_state(error),
+                error=error_record(error),
+                finished=now(),
             )
-            status["error"] = dict(type=type(error).__name__, message=str(error))
-            status["finished"] = now()
-            for state in status["models"].values():
-                if state["state"] == "running":
-                    state.update(state=status["state"], error=status["error"])
-                for condition in state["conditions"].values():
+            for model in status["models"].values():
+                if model["state"] == "running":
+                    fail_condition(model, error)
+                for condition in model["conditions"].values():
                     if condition["state"] == "running":
-                        condition.update(state=status["state"], error=status["error"])
+                        fail_condition(condition, error)
             atomic_json(out / "status.json", status)
-            # A report failure must not hide the original execution error.
             with contextlib.suppress(Exception):
-                refresh(out, formats, table_profile)
+                _refresh_reports(root, formats, table_profile)
             raise
-        status.update(state="completed", finished=now())
+        finish_status(status)
         atomic_json(out / "status.json", status)
-        return refresh(out, formats, table_profile)
+        return _refresh_reports(root, formats, table_profile)
 
 
 def _refresh_reports(directory, formats, table_profile):
-    return _report_locked(
-        directory, formats=formats, table_profile=table_profile, _refresh_existing=True
+    return report_from_settings_locked(
+        directory, formats=formats, table_profile=table_profile, refresh=True
     )
 
 
-def _run_model(name, config, paths, out, ort, code, force, status):
-    _ModelRun(name, config, paths, out, ort, code, status).run(force)
+def _run_model(name, config, paths, out, ort, code, force, status, spec=None):
+    job = _ModelRun(name, config, paths, out, ort, code, status, spec=spec)
+    settings = read_json(out / "settings.json")
+    settings["models"][name].update(job.connections())
+    atomic_json(out / "settings.json", settings)
+    job.run(force)
 
 
 class _ModelRun:
@@ -207,12 +225,13 @@ class _ModelRun:
     by the model's conditions; statistics are collected only when a condition needs them.
     """
 
-    def __init__(self, name, config, paths, out, ort, code, status):
+    def __init__(self, name, config, paths, out, ort, code, status, spec=None):
         self.name, self.config, self.paths, self.out = name, config, paths, out
         self.ort, self.code, self.status = ort, code, status
         from .models.evaluation_profiles import identity as profile_identity
 
-        self.spec = ModelSpec.for_run(
+        # run() passes the recipe it already resolved, so warnings appear once.
+        self.spec = spec or ModelSpec.for_run(
             name,
             paths.models / name,
             profile=config["evaluation"].get("profiles", {}).get(name),
@@ -228,6 +247,7 @@ class _ModelRun:
                 f"--root '<dataset folder>' --data-dir {shlex.quote(str(paths.data))}"
             )
         self.dataset = Dataset(manifest, root=paths.datasets.get(dataset_name))
+        validation_scope(self.dataset)
         # Hash the materialized graph, including the bytes actually read from external data.
         # Bundle location and external-data filenames are not model identity.
         self.graphs = {k: model_identity(v) for k, v in self.bundle.paths.items()}
@@ -237,11 +257,19 @@ class _ModelRun:
             self.count = config["calibration"]["samples"][dataset_name]
             self.factory = self.dataset.feeds(self.bundle, self.count)
             self.calibration_data = self.dataset.identity("calibration", self.count)
-        self.request_path = out / name / "recalibration.json"
-        self.request = (
-            read_json(self.request_path) if self.request_path.exists() else None
+        self.recalibration_request_path = out / name / "recalibration.json"
+        self.recalibration_request = (
+            read_json(self.recalibration_request_path)
+            if self.recalibration_request_path.exists()
+            else None
         )
-        self.generation = self.request["generation"] if self.request else None
+        # The persisted recalibration request ID is distinct from a model's
+        # generation identity. Keep it across later runs without --recalibrate.
+        self.recalibration_generation = (
+            self.recalibration_request["generation"]
+            if self.recalibration_request
+            else None
+        )
         self.statistics = None
         self.calibration_ort = None
         self.input_cache = None
@@ -251,39 +279,55 @@ class _ModelRun:
         self.model_generation = None
         self.rtn = {}  # resolved policy -> RTN QuantizationResult
 
+    def connections(self):
+        return dict(
+            recipe=self.spec.recipe,
+            network_input_map=self.bundle.mapping,
+            output_aliases=self.bundle.aliases,
+            source_graphs={
+                role: dict(path=str(path.resolve()), identity=self.graphs[role])
+                for role, path in self.bundle.paths.items()
+            },
+            generated_networks={
+                condition: str(Path("models") / self.name / condition / "network.onnx")
+                for condition, policy in self.config["conditions"].items()
+                if policy and self.config["output"]["save_qdq_models"]
+            },
+        )
+
+    def _publish_model(self, source, condition):
+        from .graph.model import external_data_files
+
+        root = self.out.parent
+        destination = root / "models" / self.name / condition
+        link_model(source, destination / "network.onnx")
+        for filename, path in external_data_files(source).items():
+            link_model(path, destination / filename)
+        for role, path in self.bundle.paths.items():
+            if role != "network":
+                link_model(path, root / "models" / self.name / path.name)
+                for filename, extra in external_data_files(path).items():
+                    link_model(extra, root / "models" / self.name / filename)
+
     def _identify_inputs(self, limit):
         """Preprocessing and evaluation identities; None for unidentifiable plugins."""
         recipe = self.spec.recipe
         implementation = preprocessing_implementation(recipe["preprocess"])
-        self.preprocessing_identity = (
-            object_hash(
-                [
-                    recipe["preprocess"],
-                    recipe["input"],
-                    self.bundle.mapping,
-                    self.graphs.get("preprocess"),
-                    implementation,
-                ]
-            )
-            if implementation
-            else None
+        self.preprocessing_identity = run_identity.preprocessing(
+            recipe, self.bundle.mapping, self.graphs.get("preprocess"), implementation
         )
         self.evaluation_identity = (
-            object_hash(
-                [
-                    self.dataset.identity("validation", limit),
-                    dict(
-                        expected_samples=self.dataset.info.get("expected_samples"),
-                        validation_samples=len(self.dataset.rows("validation")),
-                    ),
-                    recipe,
-                    self.evaluation_profile,
-                    environment(self.ort),
-                    self.code,
-                    {k: v for k, v in self.graphs.items() if k != "network"},
-                    self.bundle.mapping,
-                    self.preprocessing_identity,
-                ]
+            run_identity.generation_evaluation(
+                inputs=self.dataset.identity("validation", limit),
+                expected=self.dataset.info.get("expected_samples"),
+                listed=len(self.dataset.rows("validation")),
+                recipe=recipe,
+                profile=self.evaluation_profile,
+                runtime=environment(self.ort),
+                code=self.code,
+                graphs=self.graphs,
+                mapping=self.bundle.mapping,
+                preprocessing=self.preprocessing_identity,
             )
             if self.preprocessing_identity
             else None
@@ -307,18 +351,23 @@ class _ModelRun:
         start = time.monotonic()
         directory = self.out / self.name / condition
         scheme = scheme_for_condition(self.config, self.name, condition)
-        identity = self._identity(condition, policy, scheme)
+        generation = self._generation_identity(policy, scheme) if policy else None
+        identity = self._identity(condition, policy, generation)
         if not force and not (
-            policy and self.request and self.request["state"] == "pending"
+            policy
+            and self.recalibration_request
+            and self.recalibration_request["state"] == "pending"
         ):
             restore_evaluation(self.out, self.name, condition, identity)
-        if not force and self._reuse(directory, condition, identity, policy, current):
+        if not force and self._reuse(
+            directory, condition, identity, policy, current, generation
+        ):
             self._save_status()
             return
         result = audit = None
         self.generation_record = self.generated_path = self.model_generation = None
         if policy:
-            result = self._generated(policy, scheme, directory, force)
+            result = self._generated(policy, scheme, directory, force, generation)
             audit = runtime_audit(result, self.ort)
         network = result.model if result else self.bundle.paths["network"]
         values = self._evaluate(network, directory)
@@ -340,9 +389,9 @@ class _ModelRun:
         record.update(
             runtime_audit=audit, elapsed_s=time.monotonic() - start, finished_at=now()
         )
-        if policy and self.generation:
-            record["calibration_generation"] = self.generation
-        self._write(directory, identity, policy, record, result)
+        if policy and self.recalibration_generation:
+            record["calibration_generation"] = self.recalibration_generation
+        self._write(directory, policy, record, result)
         current.update(
             state="completed",
             identity=identity,
@@ -353,39 +402,39 @@ class _ModelRun:
 
     def _generation_identity(self, policy, scheme):
         recipe = self.spec.recipe
-        return object_hash(
-            [
-                self.code,
-                self.graphs["network"],
-                self.graphs.get("preprocess"),
-                self.bundle.mapping,
-                recipe["input"],
-                recipe["preprocess"],
-                preprocessing_implementation(recipe["preprocess"]),
-                self.calibration_data,
-                self.count,
-                run_config_identity({"calibration": self.config["calibration"]}),
-                scheme.to_dict(),
-                self._generation_environment(policy),
-                self.config["adaround"] if policy.get("adaround") else None,
-                environment(self.ort) if policy.get("adaround") else None,
-                self.config.get("activation_cache") if policy.get("adaround") else None,
-                self.generation,
-            ]
+        return run_identity.generated_model(
+            code=self.code,
+            graphs=self.graphs,
+            mapping=self.bundle.mapping,
+            recipe=recipe,
+            implementation=preprocessing_implementation(recipe["preprocess"]),
+            inputs=self.calibration_data,
+            count=self.count,
+            calibration=run_config_identity(
+                {"calibration": self.config["calibration"]}
+            ),
+            scheme=scheme.to_dict(),
+            runtime=self._generation_environment(policy),
+            adaround=self.config["adaround"] if policy.get("adaround") else None,
+            evaluation_runtime=environment(self.ort)
+            if policy.get("adaround")
+            else None,
+            activation_cache=self.config.get("activation_cache")
+            if policy.get("adaround")
+            else None,
+            request=self.recalibration_generation,
         )
 
-    def _identity(self, condition, policy, scheme):
-        return object_hash(
-            [
-                self.code,
-                self.graphs,
-                self.bundle.mapping,
-                self.evaluation_identity,
-                condition,
-                policy,
-                self._generation_identity(policy, scheme) if policy else None,
-                self.config["output"],
-            ]
+    def _identity(self, condition, policy, generation):
+        return run_identity.generated_condition(
+            code=self.code,
+            graphs=self.graphs,
+            mapping=self.bundle.mapping,
+            evaluation=self.evaluation_identity,
+            condition=condition,
+            policy=policy,
+            generation=generation,
+            output=self.config["output"],
         )
 
     def _generation_environment(self, policy):
@@ -419,11 +468,14 @@ class _ModelRun:
                 )
         return result
 
-    def _generated(self, policy, scheme, directory, force):
-        identity = self._generation_identity(policy, scheme)
+    def _generated(self, policy, scheme, directory, force, identity):
+        """Reuse or build QDQ, then publish saved models before evaluation."""
         cache = self.out / ".generated" / self.name / identity
         saved = self.config["output"]["save_qdq_models"]
-        pending = self.request is not None and self.request["state"] == "pending"
+        pending = (
+            self.recalibration_request is not None
+            and self.recalibration_request["state"] == "pending"
+        )
         reused = None
         if not force and not pending and (cache / "complete.json").is_file():
             if preprocessing_implementation(self.spec.recipe["preprocess"]) is None:
@@ -440,8 +492,8 @@ class _ModelRun:
             result, self.generation_record = reused
             self.input_cache = self.generation_record.get("input_cache")
         else:
-            self._collect_statistics()
-            result = self._quantize(policy, scheme, directory, identity)
+            self._collect_statistics(scheme.config().calibration)
+            result = self._quantize(policy, scheme, identity)
             if saved:
                 self.generation_record = save_generated(
                     cache,
@@ -464,35 +516,51 @@ class _ModelRun:
             if retained
             else "model_not_saved_regeneration_required",
         )
+        if self.generated_path is not None:
+            self._publish_model(self.generated_path, directory.name)
         return result
 
-    def _reuse(self, directory, condition, identity, policy, current):
-        """Mark an intact earlier result as reused; False means recompute it."""
+    def _reuse(self, directory, condition, identity, policy, current, generation):
+        """Reuse verified results or fall through to one evaluation attempt.
+
+        Recoverable evaluation records do not trigger a retry of failed inference.
+        Model and calibration reuse remain independent checks.
+        """
         complete = directory / "complete.json"
-        if not complete.exists():
+        if not complete.exists() and not (directory / "result.json").exists():
             return False
         if not self.preprocessing_identity:
             raise ValueError(
                 "Cannot reuse results with unidentified custom preprocessing. "
                 + _REUSE_GUIDANCE
             )
-        proof = read_json(complete)
-        if policy and proof.get("calibration_generation") != self.generation:
+        try:
+            proof = read_json(complete)
+        except (ValueError, FileNotFoundError):
+            proof = None
+        if policy and self._predates_request(proof, directory):
             return False
-        if proof["identity"] != identity:
-            raise ValueError(
-                f"Run execution identity changed for condition '{condition}'. "
-                "The stored identity does not identify the exact cause. "
-                "Possible causes include code, model/host graphs, inputs or "
-                "preprocessing, runtime or quantization settings. " + _REUSE_GUIDANCE
+        previous = reusable_evaluation(directory, identity)
+        if previous is None:
+            archived = archive_condition(directory, self.out, self.status["attempt_id"])
+            logger.warning(
+                "Saved evaluation records cannot be reused. Preserved %s and evaluating %s/%s once",
+                archived,
+                self.name,
+                condition,
             )
-        generation_ok = (
-            not policy or proof.get("calibration_generation") == self.generation
-        )
-        if not (verify_artifacts(directory, proof) and generation_ok):
-            # A tampered or incomplete result is recomputed from verified inputs.
+            if (
+                policy
+                and not (
+                    self.out / ".generated" / self.name / generation / "complete.json"
+                ).is_file()
+            ):
+                logger.warning(
+                    "No saved QDQ is available for %s/%s. Model generation is required before evaluation",
+                    self.name,
+                    condition,
+                )
             return False
-        previous = read_json(directory / "result.json")
         current.update(
             state="reused",
             identity=identity,
@@ -502,10 +570,28 @@ class _ModelRun:
             verification="same_execution_identity_and_artifact_hashes",
             reused_config_identity=run_config_identity(self.config),
         )
+        if policy and self.config["output"]["save_qdq_models"]:
+            self._publish_model(directory / "model.onnx", condition)
         return True
 
-    def _collect_statistics(self):
-        """Load or collect FP32 calibration statistics once per model."""
+    def _predates_request(self, proof, directory):
+        """True when a saved INT8 condition belongs to another recalibration request.
+
+        complete.json records the request. When it is missing or unreadable,
+        result.json does, so a damaged proof cannot block a requested rebuild.
+        """
+        saved = proof
+        if not (isinstance(saved, dict) and isinstance(saved.get("identity"), str)):
+            try:
+                saved = read_json(directory / "result.json")
+            except (ValueError, OSError):
+                return False
+            if not isinstance(saved, dict):
+                return False
+        return saved.get("calibration_generation") != self.recalibration_generation
+
+    def _collect_statistics(self, options):
+        """Collect shared histograms using a validated policy, before range selection."""
         if self.statistics is not None:
             return
         calibration = self.config["calibration"]
@@ -551,10 +637,12 @@ class _ModelRun:
             self.calibration_ort,
         )
         cache = self.paths.cache / "calibration" / self.name / key
-        if self.request:
-            cache = cache / "requests" / self.generation
-        pending = self.request is not None and self.request["state"] == "pending"
-        options = CalibrationConfig(histogram_bins=calibration["histogram_bins"])
+        if self.recalibration_request:
+            cache = cache / "requests" / self.recalibration_generation
+        pending = (
+            self.recalibration_request is not None
+            and self.recalibration_request["state"] == "pending"
+        )
         network = self.bundle.paths["network"]
         if (cache / "complete.json").exists() and not pending:
             self.statistics = read_statistics(
@@ -569,16 +657,21 @@ class _ModelRun:
                 network, self.factory, config=options, ort=self.calibration_ort
             )
             save_statistics(self.statistics, cache)
-        if self.request:
+        if self.recalibration_request:
             identity = self.statistics.statistics_identity
-            if not pending and self.request["statistics_identity"] != identity:
+            if (
+                not pending
+                and self.recalibration_request["statistics_identity"] != identity
+            ):
                 raise ValueError(
                     "Recalibration statistics changed; request --recalibrate again"
                 )
-            self.request.update(state="completed", statistics_identity=identity)
-            atomic_json(self.request_path, self.request)
+            self.recalibration_request.update(
+                state="completed", statistics_identity=identity
+            )
+            atomic_json(self.recalibration_request_path, self.recalibration_request)
 
-    def _quantize(self, policy, scheme, directory, identity):
+    def _quantize(self, policy, scheme, identity):
         """RTN result of the resolved policy, then AdaRound when requested."""
         network = self.bundle.paths["network"]
         key = object_hash(scheme.to_dict())
@@ -598,8 +691,8 @@ class _ModelRun:
             self.factory,
             AdaroundConfig(**self.config["adaround"]),
             ort=self.ort,
-            checkpoint_dir=checkpoint / self.generation
-            if self.generation
+            checkpoint_dir=checkpoint / self.recalibration_generation
+            if self.recalibration_generation
             else checkpoint,
             activation_cache=ActivationCacheConfig(**cache) if enabled else None,
         )
@@ -619,9 +712,12 @@ class _ModelRun:
             # Predictions are streamed; the preprocessed dataset is never held in memory.
             directory.mkdir(parents=True, exist_ok=True)
             stream = gzip.open(directory / "predictions.jsonl.gz.pending", "wt")
-            _tee_predictions(evaluator, stream)
+            tee_predictions(evaluator, stream)
         limit = self.config["evaluation"]["limit"]
-        selected = None if limit is None else self.dataset.rows("validation", limit)
+        sample_limit = limit
+        if limit is not None and "evaluation_pairs" in self.dataset.info:
+            # LFW limits count pairs. Other datasets must retain the requested count.
+            sample_limit = len(self.dataset.rows("validation", limit))
         try:
             measured = evaluate(
                 network,
@@ -629,8 +725,7 @@ class _ModelRun:
                 evaluator=evaluator,
                 ort=self.ort,
                 expected_samples=self.dataset.info["expected_samples"],
-                # Selected rows: an LFW limit counts pairs, not image views.
-                limit=None if selected is None else len(selected),
+                limit=sample_limit,
             )
             if capture is not None:
                 self.raw_capture = capture.finish()
@@ -696,7 +791,7 @@ class _ModelRun:
             runtime=values.runtime,
         )
 
-    def _write(self, directory, identity, policy, record, result):
+    def _write(self, directory, policy, record, result):
         """Write result.json and its files, then complete.json with their hashes."""
         if self.capture_writer is not None:
             self.capture_writer.publish()
@@ -709,30 +804,16 @@ class _ModelRun:
             model_hash = sha256(directory / "model.onnx")
         if result:
             atomic_json(directory / "quantization.json", result.audit)
-        atomic_json(directory / "result.json", record)
+        record = generation_record(record, self.config)
         files = {
             name: sha256(directory / name)
             for name in ATTESTED_FILES
             if (directory / name).is_file()
         }
-        proof = dict(
-            identity=identity,
-            result_sha256=sha256(directory / "result.json"),
-            model_sha256=model_hash,
+        write_completed(
+            directory,
+            record,
+            model_hash=model_hash,
             files=files,
+            generation=self.recalibration_generation if policy else None,
         )
-        if policy and self.generation:
-            proof["calibration_generation"] = self.generation
-        atomic_json(directory / "complete.json", proof)
-
-
-def _tee_predictions(evaluator, stream):
-    """Make evaluator.update also write each sample's prediction as one JSON line."""
-    update = evaluator.update
-
-    def update_and_write(outputs, sample):
-        update(outputs, sample)
-        prediction = dict(id=sample.sample_id, prediction=evaluator.prediction)
-        stream.write(json.dumps(prediction) + "\n")
-
-    evaluator.update = update_and_write

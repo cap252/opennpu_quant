@@ -78,11 +78,11 @@ An ONNX file by itself does not tell the tool which dataset, preprocessing or de
 
 A run first verifies its settings, model bundle and dataset. FP32 conditions go straight to evaluation. INT8 conditions reuse or collect statistics, build RTN QDQ, optionally train AdaRound, audit the graph and evaluate it.
 
-`.state/status.json` tracks each model and condition as `pending`, `running`, `completed`, `reused`, `failed` or `interrupted`, together with any error. A directory lock keeps two runs from writing to the same run directory. Reports are refreshed after each model, at the end and after a failure.
+`.state/status.json` tracks each model and condition as `pending`, `running`, `completed`, `reused`, `failed` or `interrupted`, together with any error. `interrupted` means the run was stopped, for example with Ctrl-C. In evaluation configs, a missing file during preparation leaves the condition `pending`. Other errors mark the condition `failed`. A directory lock keeps two runs from writing to the same run directory. Reports are refreshed after each condition in evaluation configs, after each model in generation configs, at the end and after a failure.
 
 When the run finishes, the console shows each condition's metric, accuracy, recovery, sample count and `partial` or `full` scope. `run --json` prints `output`, `device`, `rows` and `mean_recovery` as JSON and sends progress messages to stderr. Evaluation configs also include `execution` with the state and completed, pending and failed counts. The console format does not change which report files are written. Use `--format` and `--table-profile` to select files, with the same options as [report commands](reporting.md#output-files). TSV and Markdown are optional.
 
-With an evaluation config, exit code 0 means all requested conditions completed or were reused, including evaluations with a sample limit. Failed or pending conditions give exit code 1 after results are saved and the summary is printed. Generation configs stop at the first error. Handled execution errors exit with code 2 without a final console or JSON summary. Invalid arguments and other handled command errors also exit with code 2.
+With an evaluation config, exit code 0 means all requested conditions completed or were reused, including evaluations with a sample limit. Failed or pending conditions give exit code 1 after results are saved and the summary is printed. An evaluation config also stops when its run state or reports cannot be saved, with the same exit codes as a generation config. Generation configs stop at the first error. Handled execution errors exit with code 2 without a final console or JSON summary. Invalid arguments and other handled command errors also exit with code 2.
 
 To write the Excel-compatible `raw_data.*` tables or rebuild reports later, use `report` as described in [Reports and Excel export](reporting.md). [How to read a result](validation.md#how-to-read-a-result) explains what partial and full results can show.
 
@@ -94,7 +94,7 @@ Reuse checks the code, graphs, inputs and order, expected and listed evaluation 
 
 | Layer | Location | Lookup and verification | `--force` | `--recalibrate` | Disable with |
 |---|---|---|---|---|---|
-| Configuration guard | `<run>/.state/effective_config.json` | Generation settings | Bypassed and overwritten | No effect | — |
+| Configuration guard | `<run>/.state/settings.json` | Generation settings | Bypassed and overwritten | No effect | — |
 | Completed results | `<run>/.state/<model>/<cond>/complete.json` | Condition identity and file hashes | Ignored and recomputed | INT8 recomputed with a new generation | — |
 | Input disk cache | `<cache>/inputs/<model>/<identity>/` | Calibration data identity, preprocessing settings and source files, recipe input specification, input mapping, network input definitions, and NumPy, Pillow and OpenCV versions. With a CPU `preprocess.onnx`, also its graph, ORT execution environment and the source hashes of the ORT runtime modules | Kept | Kept | `--no-input-cache` |
 | Statistics cache | `<cache>/calibration/<model>/<key>/` | Model, input digest, bins, ORT environment, and source hashes of the statistics code and ORT runtime modules | Kept | Collected again under `requests/<generation>/` | — |

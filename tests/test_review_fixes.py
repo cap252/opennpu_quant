@@ -80,8 +80,8 @@ class ReportPolicyTests(unittest.TestCase):
         outputs = {
             "md": {"summary.md"},
             "json": {"records.json", "summary.json"},
-            "csv": {n + ".csv" for n in ("results", "metrics")},
-            "tsv": {n + ".tsv" for n in ("results", "metrics")},
+            "csv": {"results.csv"},
+            "tsv": {"results.tsv"},
         }
         for count in range(1, 5):
             for chosen in itertools.combinations(outputs, count):

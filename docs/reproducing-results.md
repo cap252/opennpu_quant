@@ -23,7 +23,7 @@ Keep each external weight file at the relative path recorded by its ONNX graph. 
 
 ## Prepare LFW
 
-For ordinary evaluation, prepare the complete LFW dataset with `data prepare lfw_mobilefacenet` as described in the [dataset guide](models-and-data.md#prepare-datasets). This prepares aligned images and the manifest used by `run`. LFW images and input tensors are not included in the release. Matching earlier CNN30 inputs also requires the [documented LFW alignment CPU setting](models-and-data.md#reproduce-lfw-alignment). Verify the aligned crop hashes before comparing accuracy; the same original JPEGs and pairs alone do not establish identical model inputs.
+For ordinary evaluation, prepare the complete LFW dataset with `data prepare lfw_mobilefacenet` as described in the [dataset guide](models-and-data.md#prepare-datasets). This prepares aligned images and the manifest used by `run`. LFW images and input tensors are not included in the release. Matching earlier CNN30 inputs also requires the [documented LFW alignment CPU setting](models-and-data.md#reproduce-lfw-alignment). Verify the aligned crop hashes before comparing accuracy. The same original JPEGs and pairs alone do not establish identical model inputs.
 
 ## Choose a model set
 
@@ -65,3 +65,7 @@ Evaluation and its `--dry-run` preparation checks exit with code 1 if any condit
 Environment and historical numerical differences are diagnostics. File corruption, invalid inputs, non-finite outputs, missing evaluation samples, a profiled first input whose outputs differ from the evaluated ones, and ONNX Runtime session or inference failures are execution errors.
 
 With an evaluation config, an execution error affects only its condition. The condition is recorded as `failed`, or as `pending` when preparation is missing a file, together with its error in `.state/status.json`. Later conditions still run, completed results are kept, and the command exits with code 1 after printing the summary. Fix the cause and repeat the command to run the remaining conditions. A generation config stops at the first execution error, records it in `.state/status.json` and exits with code 2.
+
+Unexpected errors, such as a programming error, are recorded the same way. An evaluation config also logs the traceback and continues with the next condition. A generation config stops and shows the traceback with exit code 1. Only a stop request, such as Ctrl-C, records `interrupted`.
+
+An error while saving the run state or its reports, such as a full disk, stops an evaluation config as well. Completed conditions remain reusable. When the run state can still be written, the run is recorded as `failed` with that error in `.state/status.json`. A handled error exits with code 2, and an unexpected error shows its traceback with code 1, as with generation configs.

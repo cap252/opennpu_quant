@@ -40,7 +40,7 @@ class ModelSpec:
 
     @classmethod
     def for_run(cls, name, directory, *, profile=None):
-        """Use packaged evaluation defaults with the local bundle's graph contract."""
+        """Load the local recipe when present, keeping the packaged default profile."""
         from .evaluation_profiles import apply_profile, profile_name
 
         local = Path(directory) / "recipe.yaml"

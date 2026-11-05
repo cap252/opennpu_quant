@@ -71,7 +71,7 @@ class RecordedConditionTests(unittest.TestCase):
         worker.factory = lambda: iter(())
         worker.config = {"adaround": {"steps": 1}}
         worker.rtn = {}
-        worker.generation = None
+        worker.recalibration_generation = None
         first, second = object(), object()
         with (
             tempfile.TemporaryDirectory() as temp,
@@ -85,13 +85,13 @@ class RecordedConditionTests(unittest.TestCase):
             worker.out = directory
             worker.name = "toy"
             a, b = Scheme(percentile=99.999), Scheme(percentile=99.99)
-            self.assertIs(first, worker._quantize(policy, a, directory, "first"))
+            self.assertIs(first, worker._quantize(policy, a, "first"))
             self.assertIs(
                 second,
-                worker._quantize(dict(policy, adaround=True), b, directory, "second"),
+                worker._quantize(dict(policy, adaround=True), b, "second"),
             )
             self.assertIs(second, fit.call_args.args[1])
-            self.assertIs(second, worker._quantize(policy, b, directory, "again"))
+            self.assertIs(second, worker._quantize(policy, b, "again"))
             self.assertEqual(2, quantize.call_count)
 
     def test_real_runner_and_failed_report_resolve_the_same_condition(self):
@@ -108,14 +108,18 @@ class RecordedConditionTests(unittest.TestCase):
                 return_value=self.policies(config, "toy"),
             ):
                 # Collect and quantize actual small tensors for both distinct policies.
-                summary = run(config, paths)
+                summary = run(config, paths, formats="csv,json,md")
                 self.assertEqual(
                     [None, 99.999, 99.99],
                     [row["percentile"] for row in summary["rows"]],
                 )
                 for name, expected in (("pot_rtn", 99.999), ("pot_adaround", 99.99)):
                     value = read_json(
-                        paths.runs / config["name"] / "toy" / name / "result.json"
+                        paths.runs
+                        / config["name"]
+                        / ".state/toy"
+                        / name
+                        / "result.json"
                     )
                     self.assertEqual(expected, value["scheme"]["percentile"])
                 with patch(
@@ -123,7 +127,7 @@ class RecordedConditionTests(unittest.TestCase):
                     side_effect=ValueError("evaluation interrupted"),
                 ):
                     with self.assertRaisesRegex(ValueError, "evaluation interrupted"):
-                        run(config, paths, force=True)
+                        run(config, paths, force=True, formats="csv,json,md")
                 summary = read_json(paths.runs / config["name"] / "summary.json")
                 self.assertEqual(
                     [None, 99.999, 99.99],

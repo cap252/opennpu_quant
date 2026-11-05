@@ -207,7 +207,7 @@ print(json.dumps(sorted({'numpy','onnx','onnxruntime','torch','tensorflow','cv2'
         self.assertEqual("views", meta["sample_unit"])
         self.assertEqual(100, meta["view_count"])
         self.assertEqual(6000, meta["pair_count"])
-        self.assertEqual("current_v1", meta["evaluation_profile"])
+        self.assertIsNone(meta["evaluation_profile"])
         with tempfile.TemporaryDirectory() as temp:
             write_report(build_report([]), temp, formats="csv,tsv")
             self.assertEqual(

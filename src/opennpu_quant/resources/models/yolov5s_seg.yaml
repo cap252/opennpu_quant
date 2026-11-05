@@ -21,7 +21,7 @@ preprocess:
   stride: 32
   rectangular: true
 decode:
-  profile: historical_cnn33_v1
+  profile: yolov5_seg_scaled_coeff_bbox_area_v1
   kind: yolo_seg
   output: predictions
   confidence_threshold: 0.001

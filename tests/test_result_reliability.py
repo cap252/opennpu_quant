@@ -2,6 +2,7 @@
 
 import copy
 import csv
+import json
 import shutil
 import subprocess
 import sys
@@ -64,7 +65,7 @@ def fixture(root, *, external=False, host=None):
     onnx.save_model(model, directory / "network.onnx", **options)
     recipe = copy.deepcopy(ModelSpec.load("resnet18").recipe)
     recipe["name"] = "toy"
-    recipe["decode"]["profile"] = "current_v1"
+    recipe["decode"]["profile"] = "stable_topk_v1"
     recipe["preprocess"].update(resize=4, crop=4)
     recipe["input"]["shape"] = [1, 3, 4, 4]
     if host:
@@ -127,6 +128,173 @@ def fixture(root, *, external=False, host=None):
 
 
 class ResultReliabilityTests(unittest.TestCase):
+    def test_generation_requires_requested_samples(self):
+        for expected, limit, exit_code in (
+            (3, 3, 2),
+            (3, None, 2),
+            (3, 2, 0),
+            (2, 3, 0),
+        ):
+            with (
+                self.subTest(expected=expected, limit=limit),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                paths, config = fixture(root)
+                config["conditions"] = {"fp32": {}}
+                config["evaluation"]["limit"] = limit
+                manifest = paths.data / "imagenet/manifest.json"
+                data = read_json(manifest)
+                data["expected_samples"] = expected
+                atomic_json(manifest, data)
+                config_file = root / "config.json"
+                atomic_json(config_file, config)
+                process = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "opennpu_quant",
+                        "run",
+                        "-c",
+                        str(config_file),
+                        "--home",
+                        str(root),
+                        "--local-config",
+                        str(root / "local.yaml"),
+                        "--json",
+                    ],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                self.assertEqual(exit_code, process.returncode, process.stderr)
+                output = paths.runs / config["name"]
+                directory = output / ".state/toy/fp32"
+                if exit_code:
+                    self.assertIn("Missing evaluation samples", process.stderr)
+                    self.assertEqual(
+                        "failed", read_json(output / ".state/status.json")["state"]
+                    )
+                    self.assertFalse((directory / "complete.json").exists())
+                    self.assertFalse((directory / "result.json").exists())
+                else:
+                    result = json.loads(process.stdout)
+                    self.assertEqual("completed", result["rows"][0]["state"])
+                    record = read_json(directory / "result.json")
+                    self.assertEqual(2, record["samples"])
+                    self.assertEqual(expected == 2, record["full_evaluation"])
+                    self.assertTrue((directory / "complete.json").is_file())
+
+    def test_valid_histogram_settings_match_api_and_reuse_statistics(self):
+        from opennpu_quant import quantize
+        from opennpu_quant.configuration import runtime, scheme_for_condition
+        from opennpu_quant.data.samples import Dataset
+        from opennpu_quant.models.bundle import ModelBundle
+
+        for bins, quantized in ((32, 16), (2048, 128)):
+            with (
+                self.subTest(histogram_bins=bins),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                paths, config = fixture(root)
+                config["calibration"]["histogram_bins"] = bins
+                for scheme in config["schemes"].values():
+                    scheme["quantized_bins"] = quantized
+                config["schemes"]["float"].update(
+                    method="entropy", percentile=None, quantized_bins=quantized // 2
+                )
+                config["conditions"]["float_rtn"] = {"scheme": "float"}
+                config_file = root / "experiment.yaml"
+                config_file.write_text(yaml.safe_dump(config))
+                command = [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "opennpu_quant",
+                    "run",
+                    "-c",
+                    str(config_file),
+                    "--home",
+                    str(root),
+                    "--json",
+                ]
+                for extra in (["--dry-run"], []):
+                    process = subprocess.run(
+                        [*command, *extra],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    self.assertEqual(0, process.returncode, process.stderr)
+                    json.loads(process.stdout)
+                out = paths.runs / config["name"]
+                bundle = ModelBundle.from_directory(
+                    ModelSpec.load(paths.models / "toy/recipe.yaml"),
+                    paths.models / "toy",
+                )
+                feeds = Dataset(paths.data / "imagenet/manifest.json").feeds(bundle, 2)
+                for condition in ("pot_rtn", "float_rtn"):
+                    scheme = scheme_for_condition(config, "toy", condition)
+                    expected = quantize(
+                        bundle.paths["network"], feeds, scheme, ort=runtime(config)
+                    )
+                    model = out / "models/toy" / condition / "network.onnx"
+                    self.assertEqual(
+                        expected.model.SerializeToString(),
+                        onnx.load(model).SerializeToString(),
+                    )
+                    record = read_json(out / ".state/toy" / condition / "result.json")
+                    self.assertEqual(2, record["samples"])
+                process = subprocess.run(
+                    command, cwd=root, capture_output=True, text=True, timeout=60
+                )
+                self.assertEqual(0, process.returncode, process.stderr)
+                self.assertTrue(
+                    all(
+                        state["state"] == "reused"
+                        for state in read_json(out / ".state/status.json")["models"][
+                            "toy"
+                        ]["conditions"].values()
+                    )
+                )
+                # A different run must also consume the cached statistics for both policies.
+                cache = paths.cache / "calibration/toy"
+                saved = {
+                    str(p.relative_to(cache)): sha256(p)
+                    for p in cache.rglob("*")
+                    if p.is_file()
+                }
+                self.assertEqual(1, len(list(cache.glob("*/complete.json"))))
+                config["name"] += "-new-evaluation"
+                config_file.write_text(yaml.safe_dump(config))
+                process = subprocess.run(
+                    command, cwd=root, capture_output=True, text=True, timeout=60
+                )
+                self.assertEqual(0, process.returncode, process.stderr)
+                self.assertEqual(
+                    saved,
+                    {
+                        str(p.relative_to(cache)): sha256(p)
+                        for p in cache.rglob("*")
+                        if p.is_file()
+                    },
+                )
+                for condition in ("pot_rtn", "float_rtn"):
+                    self.assertEqual(
+                        sha256(out / "models/toy" / condition / "network.onnx"),
+                        sha256(
+                            paths.runs
+                            / config["name"]
+                            / "models/toy"
+                            / condition
+                            / "network.onnx"
+                        ),
+                    )
+
     def test_success_refreshes_existing_files_without_cross_product(self):
         from opennpu_quant.report import report
 
@@ -144,7 +312,7 @@ class ResultReliabilityTests(unittest.TestCase):
 
             def check(expected, samples):
                 for suffix, delimiter in (("csv", ","), ("tsv", "\t")):
-                    for stem in ("results", "metrics"):
+                    for stem in ("results",):
                         with (output / (stem + "." + suffix)).open(
                             encoding="utf-8-sig", newline=""
                         ) as stream:
@@ -237,7 +405,7 @@ class ResultReliabilityTests(unittest.TestCase):
             config["evaluation"]["limit"] = 2
             observed = []
 
-            def inspect_progress(name, *args):
+            def inspect_progress(name, *args, **kwargs):
                 if name == "other":
                     with (output / "results.tsv").open(newline="") as stream:
                         rows = list(csv.DictReader(stream, delimiter="\t"))
@@ -249,10 +417,10 @@ class ResultReliabilityTests(unittest.TestCase):
                     by_model = {r["model"]: r for r in summary}
                     self.assertEqual(50.0, by_model["toy"]["value_pct"])
                     self.assertIsNone(by_model["other"]["value_pct"])
-                    status = read_json(output / "status.json")["models"]
+                    status = read_json(output / ".state/status.json")["models"]
                     self.assertEqual("completed", status["toy"]["state"])
                     observed.append(name)
-                return _run_model(name, *args)
+                return _run_model(name, *args, **kwargs)
 
             with patch("opennpu_quant.runner._run_model", side_effect=inspect_progress):
                 run(config, paths, force=True, formats="csv")
@@ -283,7 +451,9 @@ class ResultReliabilityTests(unittest.TestCase):
                         formats="csv",
                         table_profile="opennpu_raw",
                     )
-                self.assertEqual(state, read_json(output / "status.json")["state"])
+                self.assertEqual(
+                    state, read_json(output / ".state/status.json")["state"]
+                )
                 row = read_json(output / "summary.json")["rows"][0]
                 self.assertFalse(row["complete"])
                 self.assertIsNone(row["value_pct"])
@@ -339,15 +509,17 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertIn("UnidentifiedImageError", result.stderr)
             self.assertIn(str(image), result.stderr)
             self.assertNotIn("Traceback", result.stderr)
-            output = output / config["name"] / ".state"
-            self.assertEqual("failed", read_json(output / "status.json")["state"])
-            self.assertFalse((output / "toy/fp32/complete.json").exists())
-            self.assertFalse((output / "toy/fp32/result.json").exists())
+            output = output / config["name"]
+            self.assertEqual(
+                "failed", read_json(output / ".state/status.json")["state"]
+            )
+            self.assertFalse((output / ".state/toy/fp32/complete.json").exists())
+            self.assertFalse((output / ".state/toy/fp32/result.json").exists())
 
     def test_report_format_changes_reuse_completed_measurements(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             output = paths.runs / config["name"]
             measured = {p: p.read_bytes() for p in output.rglob("result.json")}
             with (
@@ -362,7 +534,7 @@ class ResultReliabilityTests(unittest.TestCase):
             ):
                 run(config, paths, formats="tsv", table_profile="opennpu_raw")
             self.assertEqual(measured, {p: p.read_bytes() for p in measured})
-            conditions = read_json(output / "status.json")["models"]["toy"][
+            conditions = read_json(output / ".state/status.json")["models"]["toy"][
                 "conditions"
             ]
             self.assertTrue(all(r["state"] == "reused" for r in conditions.values()))
@@ -380,15 +552,21 @@ class ResultReliabilityTests(unittest.TestCase):
             run(config, paths, formats="csv,tsv,json,md")
             output = paths.runs / config["name"]
             report(output, formats="csv,tsv,json,md", table_profile="opennpu_raw")
-            proof = output / "toy/fp32/complete.json"
-            original = proof.read_bytes()
+            proof = output / ".state/toy/fp32/complete.json"
             for corrupt in (b"{broken", b"[]", b'{"files": []}'):
                 with self.subTest(proof=corrupt):
                     proof.write_bytes(corrupt)
-                    with self.assertRaises((ValueError, TypeError, KeyError)):
-                        run(config, paths, formats="csv")
+                    with patch(
+                        "opennpu_quant.runner.evaluate",
+                        side_effect=RuntimeError("persistent evaluation failure"),
+                    ) as evaluate:
+                        with self.assertRaisesRegex(
+                            RuntimeError, "persistent evaluation failure"
+                        ):
+                            run(config, paths, formats="csv")
+                    self.assertEqual(1, evaluate.call_count)
                     self.assertEqual(
-                        "failed", read_json(output / "status.json")["state"]
+                        "failed", read_json(output / ".state/status.json")["state"]
                     )
                     summary = read_json(output / "summary.json")
                     self.assertEqual("failed", summary["rows"][0]["state"])
@@ -411,12 +589,20 @@ class ResultReliabilityTests(unittest.TestCase):
                                     list(csv.DictReader(stream, delimiter=delimiter)),
                                 )
                     self.assertNotIn("100.0000", (output / "summary.md").read_text())
-                    self.assertEqual(corrupt, proof.read_bytes())
-            proof.write_bytes(original)
-            run(config, paths)
+                    attempt = read_json(output / ".state/status.json")["attempt_id"]
+                    archived = (
+                        output
+                        / ".state/.evaluations"
+                        / attempt
+                        / "toy/fp32/complete.json"
+                    )
+                    self.assertEqual(corrupt, archived.read_bytes())
+                    self.assertFalse(proof.exists())
+                    run(config, paths, force=True, formats="csv")
+            run(config, paths, formats="csv,json,md")
             self.assertEqual(
                 "reused",
-                read_json(output / "status.json")["models"]["toy"]["conditions"][
+                read_json(output / ".state/status.json")["models"]["toy"]["conditions"][
                     "fp32"
                 ]["state"],
             )
@@ -426,9 +612,9 @@ class ResultReliabilityTests(unittest.TestCase):
     def test_f01_failed_force_does_not_complete_old_quantized_result(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             output = paths.runs / config["name"]
-            old = output / "toy/pot_rtn/result.json"
+            old = output / ".state/toy/pot_rtn/result.json"
             old_bytes = old.read_bytes()
             network = paths.models / "toy/network.onnx"
             model = onnx.load(network)
@@ -441,7 +627,7 @@ class ResultReliabilityTests(unittest.TestCase):
                 side_effect=RuntimeError("injected failure"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "injected failure"):
-                    run(config, paths, force=True)
+                    run(config, paths, force=True, formats="csv,json,md")
             self.assertEqual(old_bytes, old.read_bytes(), "keep the prior measurement")
             summary = read_json(output / "summary.json")
             row = next(r for r in summary["rows"] if r["condition"] == "pot_rtn")
@@ -453,18 +639,18 @@ class ResultReliabilityTests(unittest.TestCase):
     def test_f01_verified_reuse_records_original_attempt_and_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             output = paths.runs / config["name"]
-            target = output / "toy/pot_rtn/result.json"
+            target = output / ".state/toy/pot_rtn/result.json"
             original = target.read_bytes()
             with patch(
                 "opennpu_quant.runner.evaluate",
                 side_effect=AssertionError("must reuse"),
             ):
-                result = run(config, paths)
+                result = run(config, paths, formats="csv,json,md")
             self.assertTrue(all(r["complete"] for r in result["rows"]))
             self.assertEqual(original, target.read_bytes())
-            status = read_json(output / "status.json")
+            status = read_json(output / ".state/status.json")
             reused = status["models"]["toy"]["conditions"]["pot_rtn"]
             self.assertEqual("reused", reused["state"])
             self.assertNotEqual(status["attempt_id"], reused["measurement_attempt_id"])
@@ -480,7 +666,7 @@ class ResultReliabilityTests(unittest.TestCase):
                     host=graph if graph != "network" else None,
                 )
                 config["conditions"] = {"fp32": {}}
-                run(config, paths)
+                run(config, paths, formats="csv,json,md")
                 directory = paths.models / "toy"
                 path = directory / (graph + ".onnx")
                 header_hash = sha256(path)
@@ -496,7 +682,7 @@ class ResultReliabilityTests(unittest.TestCase):
                     side_effect=AssertionError("not authorized to recompute"),
                 ):
                     with self.assertRaisesRegex(ValueError, "changed"):
-                        run(config, paths)
+                        run(config, paths, formats="csv,json,md")
                 summary = read_json(paths.runs / config["name"] / "summary.json")
                 self.assertFalse(summary["rows"][0]["complete"])
 
@@ -507,7 +693,7 @@ class ResultReliabilityTests(unittest.TestCase):
             root = Path(temp)
             paths, config = fixture(root / "original", external=True, host="preprocess")
             config["conditions"] = {"fp32": {}}
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             moved = root / "moved_models"
             shutil.copytree(paths.models, moved)
             relocated = Paths.resolve(
@@ -517,7 +703,7 @@ class ResultReliabilityTests(unittest.TestCase):
                 "opennpu_quant.runner.evaluate",
                 side_effect=AssertionError("same content"),
             ):
-                result = run(config, relocated)
+                result = run(config, relocated, formats="csv,json,md")
             self.assertTrue(result["rows"][0]["complete"])
 
     def test_report_refuses_different_source_without_attempt_status(
@@ -529,23 +715,25 @@ class ResultReliabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             paths, config = fixture(root)
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             output = paths.runs / config["name"]
             prior = root / "previous_int8"
-            shutil.copytree(output / "toy/pot_rtn", prior)
+            shutil.copytree(output / ".state/toy/pot_rtn", prior)
             network = paths.models / "toy/network.onnx"
             model = onnx.load(network)
             model.graph.initializer[1].CopyFrom(
                 n.from_array(np.arange(6, dtype=np.float32) + 1, "bias")
             )
             onnx.save_model(model, network)
-            run(config, paths, force=True)
-            shutil.copytree(prior, output / "toy/pot_rtn", dirs_exist_ok=True)
-            (output / "status.json").unlink()
+            run(config, paths, force=True, formats="csv,json,md")
+            shutil.copytree(prior, output / ".state/toy/pot_rtn", dirs_exist_ok=True)
+            (output / ".state/status.json").unlink()
             row = next(r for r in report(output)["rows"] if r["condition"] == "pot_rtn")
-            self.assertIsNotNone(row["value_pct"], "preserve the old measurement")
+            self.assertIsNone(
+                row["value_pct"], "missing status cannot attest a measurement"
+            )
             self.assertIsNone(row["recovery_pct"])
-            self.assertIn("mismatch:source_model_identity", row["pairing_reason"])
+            self.assertEqual("unverified", row["state"])
 
     def test_f02_effective_input_mapping_invalidates_reuse(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -555,7 +743,7 @@ class ResultReliabilityTests(unittest.TestCase):
             (directory / "preprocess.bin").write_bytes(
                 np.ones((1, 3, 4, 4), np.float32).tobytes()
             )
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             atomic_json(
                 directory / "model.json",
                 dict(
@@ -564,17 +752,17 @@ class ResultReliabilityTests(unittest.TestCase):
                 ),
             )
             with self.assertRaisesRegex(ValueError, "changed"):
-                run(config, paths)
+                run(config, paths, formats="csv,json,md")
 
     def test_recomputed_result_does_not_attest_an_earlier_attempts_files(self):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
             config["output"]["save_predictions"] = True
-            run(config, paths)
-            condition = paths.runs / config["name"] / "toy/pot_rtn"
+            run(config, paths, formats="csv,json,md")
+            condition = paths.runs / config["name"] / ".state/toy/pot_rtn"
             self.assertTrue((condition / "predictions.jsonl.gz").is_file())
             config["output"]["save_predictions"] = False
-            result = run(config, paths, force=True)
+            result = run(config, paths, force=True, formats="csv,json,md")
             self.assertFalse((condition / "predictions.jsonl.gz").exists())
             files = read_json(condition / "complete.json")["files"]
             self.assertNotIn("predictions.jsonl.gz", files)
@@ -589,12 +777,12 @@ class ResultReliabilityTests(unittest.TestCase):
                     side_effect=RuntimeError("injected failure"),
                 ),
                 patch(
-                    "opennpu_quant.runner._report_locked",
+                    "opennpu_quant.runner.report_from_settings_locked",
                     side_effect=ValueError("report failure"),
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "injected failure"):
-                    run(config, paths)
+                    run(config, paths, formats="csv,json,md")
 
     def test_undefined_primary_metric_lists_the_available_metrics(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -604,7 +792,7 @@ class ResultReliabilityTests(unittest.TestCase):
             recipe["metric"] = "top3"
             recipe_path.write_text(yaml.safe_dump(recipe))
             with self.assertRaisesRegex(ValueError, "'top3'.*available: top1, top5"):
-                run(config, paths)
+                run(config, paths, formats="csv,json,md")
 
 
 if __name__ == "__main__":

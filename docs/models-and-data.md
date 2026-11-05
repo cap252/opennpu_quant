@@ -95,7 +95,7 @@ A full evaluation scores all 6,000 pairs from 15,402 original and horizontally f
 
 ### Reproduce LFW alignment
 
-The pinned package versions do not fix NumPy/OpenBLAS CPU dispatch. Face alignment estimates a similarity transform with NumPy linear algebra; different OpenBLAS kernels can change a few crop pixels and affect verification accuracy even when the source JPEGs, landmarks and pairs match.
+The pinned package versions do not fix NumPy/OpenBLAS CPU dispatch. Face alignment estimates a similarity transform with NumPy linear algebra. Different OpenBLAS kernels can change a few crop pixels and affect verification accuracy even when the source JPEGs, landmarks and pairs match.
 
 The earlier CNN30 aligned inputs used the OpenBLAS `Haswell` kernel. On a Haswell-compatible Linux x86_64 CPU, prepare matching inputs with the variables set before Python starts:
 
@@ -105,7 +105,7 @@ OPENBLAS_CORETYPE=Haswell OPENBLAS_NUM_THREADS=1 \
   --data-dir workspace/data
 ```
 
-This setting applies to preparation. The prepared PNGs retain the resulting pixels; changing an inference process's environment does not repair previously prepared crops. Keep previous results and manifests unchanged and use a new `--data-dir` when checking an alternate alignment environment.
+This setting applies to preparation. The prepared PNGs retain the resulting pixels. Changing an inference process's environment does not repair previously prepared crops. Keep previous results and manifests unchanged and use a new `--data-dir` when checking an alternate alignment environment.
 
 Compare the `crop_sha256` values for every image in `lfw_mobilefacenet/alignment.json`, as well as source images, pair/fold order and original/flip views, before claiming input equivalence between servers. On another CPU or with different numerical libraries, validate these hashes instead of assuming that matching package versions guarantee identical aligned inputs.
 
@@ -125,7 +125,7 @@ LFW smoke manifests and partial results are not accepted for execution, reportin
 opennpu-quant export resnet18
 ```
 
-Export verifies the recipe's pinned checkpoint and source, then creates the ONNX bundle. `strict` (default) and `functional` are compatibility choices with the same checks. Both report finite framework-to-ONNX differences in the console and `model.json` without rejecting export. Shape, dtype, non-finite output, graph conversion and partition errors stop export.
+Export verifies the recipe's pinned checkpoint and source, then creates the ONNX bundle. `--validation strict` (default) and `--validation functional` are compatibility choices with the same checks. Both report finite framework-to-ONNX differences in the console and `model.json` without rejecting export. Shape, dtype, non-finite output, graph conversion and partition errors stop export.
 
 Export checks use CPU fixtures and do not establish GPU execution or full-dataset accuracy. For GPU evaluation, run the exported network with `--device cuda:0`. Host graphs remain on CPU.
 
@@ -193,4 +193,4 @@ Graphs with symbolic spatial dimensions are checked at three resolutions during 
 3. Copy an experiment file, add the model and its percentiles under `percentiles.<model>`, and give the experiment a new name ([Configuration reference](configuration.md#example-change-a-percentile)).
 4. Check the settings with `opennpu-quant run -c my_experiment.yaml --models my_model --dry-run`, then verify inputs, outputs and evaluation on a small run.
 
-If no built-in decoder fits the model's outputs, write a custom evaluator with the [Python API](api.md). Custom `module:function` preprocessing turns off input caching and result reuse, because its identity cannot be determined automatically. Unsupported operators and other graph limits are listed in [Common limitations for custom models](quantization.md#10-common-limitations-for-custom-models).
+If no built-in decoder fits the model's outputs, write a custom evaluator with the [Python API](api.md). For custom `module:function` preprocessing, disable input caching with `--no-input-cache` or `calibration.input_cache.enabled: false`. Its implementation cannot be verified for result reuse. Use a new output directory or `--force` when running it again. Unsupported operators and other graph limits are listed in [Common limitations for custom models](quantization.md#10-common-limitations-for-custom-models).

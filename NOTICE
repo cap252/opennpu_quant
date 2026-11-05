@@ -10,6 +10,9 @@ Source: https://github.com/foamliu/MobileFaceNet
 License: Apache-2.0 (mobilefacenet.txt)
 
 The alignment points and 112-square crop convention follow this project.
-Network code, weights and LFW data are acquired separately.
+Upstream network source code, weights and LFW data are not included in the
+Python package. Model Release archives contain converted weights. These weights
+remain subject to the applicable terms of the original model assets. LFW data
+is not included.
 
 See THIRD_PARTY.md for dependency and external-asset information.

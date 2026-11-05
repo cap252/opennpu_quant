@@ -8,13 +8,13 @@ Generation runs use model recipes. Evaluation configs use catalog recipes. Both 
 
 | Models | Profile | Behavior it preserves |
 |---|---|---|
-| 12 classifiers | `stable_topk_v1` | Exact ties are ordered by class index. Archived selections keep their recorded profile |
+| 12 classifiers | `stable_topk_v1` | Exact ties are ordered by class index |
 | YOLOX | `yolox_torch_nms_v1` | Original NMS and score handling, including out-of-image coordinates and more than 300 detections |
 | YOLOv7-face | `yolov7_face_clip_first4_v1` | Original coordinate restoration, integer conversion, score serialization and clipping of only the first four boxes |
 | YOLOv5s-seg | `yolov5_seg_scaled_coeff_bbox_area_v1` | Objectness-scaled mask coefficients, mask reconstruction order and bbox-area evaluation |
 | Other models | Decoder-specific names, such as `retinaface_v1`, `nanodet_v1` or `segmentation_resize_v1` | Each model's decoder and evaluator as implemented |
 
-Use these descriptive profile names when setting `evaluation.profiles.<model>` in an experiment file. CLI choices also retain compatibility names such as `current_v1`, `historical_cnn33_v1` and `numpy_argsort_v1`. Their behavior depends on the selected model, and unsupported combinations are rejected.
+Set `evaluation.profiles.<model>` in an experiment file using the names above. Unsupported model/profile combinations are rejected.
 
 For classification, `numpy_topk_v1` retains the original NumPy ordering for comparison. The public `TopKClassification` API sorts stably by default.
 
@@ -30,17 +30,18 @@ To replace a model's Python decoder entirely, use the Python API hook described 
 
 For a packaged model, a generation run picks the profile in this order:
 
-1. `--evaluation-profile`, which applies to every selected model.
-2. `evaluation.profiles.<model>` in the experiment file.
-3. The default profile of the packaged recipe.
+1. `evaluation.profiles.<model>` in the experiment file.
+2. The default profile of the packaged recipe.
 
 A local `<models-dir>/<model>/recipe.yaml` still controls the bundle settings, such as inputs, preprocessing, graphs and output names. The profile default comes from the package, and the tool warns when a local recipe names a different profile. It does not edit the file. Custom models that are not in the package use the profile in their own recipe.
+
+Local recipes and experiment files use the profile names listed above. Unknown names are rejected.
 
 <a id="changing-preserved-behavior"></a>
 
 ## Compare against another profile
 
-Changing a profile can change predictions and evaluation scores even for the same model outputs. Use the same profile for FP32 and INT8 accuracy comparisons, and keep the archived selection's profile when inspecting historical results.
+Changing a profile can change predictions and evaluation scores even for the same model outputs. Use the same profile for FP32 and INT8 accuracy comparisons. Saved results record the profile they were evaluated with.
 
 Use a new output directory and set the profile per model in the experiment file. This excerpt changes only face clipping and mask area:
 

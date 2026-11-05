@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import logging
 import math
 from pathlib import Path
 from ._io import atomic_json, read_json
@@ -10,16 +11,14 @@ from ._identity import compare_identity_evidence
 from .data.lfw_protocol import reject_partial_result
 
 SCHEMA_VERSION = 1
-SUCCESS = {"completed", "evaluated", "reused"}
+SUCCESS = {"completed", "reused"}
 REPORT_FORMATS = ("csv", "tsv", "json", "md")
 DEFAULT_REPORT_FORMATS = ("csv", "json")
-METRIC_FIELDS = "run_id model model_name condition state metric value unit value_pct primary".split()
-DIAGNOSTIC_FIELDS = """run_id model condition state failure_reason metric value unit
-samples expected_samples repeat_bitwise original_accuracy_state""".split()
-
 RAW_FIELDS = """model task dataset metric fp32_accuracy int8_accuracy recovery_percent
 scheme percentile model_source_url model_source_revision top5_percent AP50_percent AP75_percent
 metrics_json""".split()
+
+logger = logging.getLogger(__name__)
 
 
 def compact(value):
@@ -273,7 +272,18 @@ def _baseline_scope(record):
     )
 
 
-def tables(records):
+def tables(records, *, baselines=None):
+    """Rows of the primary table and per-metric detail rows for ``records``.
+
+    ``baselines`` are further records of the same runs. Their FP32 runtime is
+    used for the environment diagnostic when a filter leaves the FP32 record
+    out of ``records``; pairing and recovery use ``records`` alone.
+    """
+    runtimes = {
+        (r["run_id"], r["model"]): r.get("runtime")
+        for r in baselines or ()
+        if r.get("condition") == "fp32"
+    }
     lookup = {}
     for r in records:
         reject_partial_result(r)
@@ -404,7 +414,10 @@ def tables(records):
         from .ort.diagnostics import compare as compare_environment
 
         row["environment_diagnostic"] = compare_environment(
-            r.get("runtime"), (b or {}).get("runtime")
+            r.get("runtime"),
+            b.get("runtime")
+            if b is not None
+            else runtimes.get((r["run_id"], r["model"])),
         )
         failure = r.get("failure_reason")
         failure_details = r.get(
@@ -498,49 +511,21 @@ def report_policy(value):
     return dict(primary_metric=dict(primary), target_mean_recovery=target)
 
 
-def diagnostic_rows(records):
-    """Unaccepted measurements for inspection, never used for accuracy or recovery."""
-    rows = []
-    for record in records:
-        diagnostic = record.get("diagnostic_measurement")
-        if not diagnostic:
-            continue
-        if (
-            record.get("state") != "fail"
-            or record.get("evidence", {}).get("result_hash_verified") is not True
-            or diagnostic.get("repeat_bitwise") is not False
-        ):
-            raise ValueError("Diagnostic measurement requires a verified failed result")
-        metrics = diagnostic.get("metrics", {})
-        values = metric_values(
-            {name: metric["value"] for name, metric in metrics.items()},
-            {name: metric["unit"] for name, metric in metrics.items()},
+def warn_obsolete_reports(directory):
+    """Name the metrics tables of earlier versions, which reports never update."""
+    directory = Path(directory)
+    obsolete = [
+        str(directory / name)
+        for name in ("metrics.csv", "metrics.tsv")
+        if (directory / name).is_file()
+    ]
+    if obsolete:
+        logger.warning(
+            "Obsolete report files are not updated: %s. "
+            "Use results.csv or results.tsv for current metrics, or raw_data tables "
+            "with opennpu_raw. Check and remove the obsolete files if no longer needed.",
+            ", ".join(obsolete),
         )
-        for name, metric in values.items():
-            rows.append(
-                dict(
-                    **{
-                        key: record.get(key)
-                        for key in (
-                            "run_id",
-                            "model",
-                            "condition",
-                            "state",
-                            "failure_reason",
-                            "samples",
-                            "expected_samples",
-                        )
-                    },
-                    metric=name,
-                    value=metric["value"],
-                    unit=metric["unit"],
-                    repeat_bitwise=False,
-                    original_accuracy_state=diagnostic.get("original_accuracy", {}).get(
-                        "state"
-                    ),
-                )
-            )
-    return rows
 
 
 def export_records(
@@ -551,15 +536,24 @@ def export_records(
     formats=None,
     table_profile=None,
     summary=None,
-    _refresh_existing=False,
-    _primary_only=False,
+    refresh=False,
+    baselines=None,
 ):
-    """Write requested reports, optionally refreshing existing run reports too."""
+    """Write requested reports, optionally refreshing existing run reports too.
+
+    ``refresh`` also rewrites supported report files in unselected formats, as
+    a run does after each condition or model. Obsolete metrics tables are
+    preserved. A standalone report warns about them here, and a run warns once
+    before its first refresh. ``baselines`` is passed to :func:`tables` for
+    environment diagnostics.
+    """
     selected = normalize_formats(formats)
     directory = Path(directory)
+    if not refresh:
+        warn_obsolete_reports(directory)
 
     def wanted(name, requested):
-        return requested or (_refresh_existing and (directory / name).is_file())
+        return requested or (refresh and (directory / name).is_file())
 
     raw_files = ["raw_data.metadata.json"] + [
         stem + "." + suffix
@@ -570,46 +564,27 @@ def export_records(
     if table_profile or any(wanted(name, False) for name in raw_files):
         from .raw_report import build_report
 
-        compatible = build_report(records, profile=table_profile or "opennpu_raw")
-    rows, metrics = tables(records)
-    diagnostics = diagnostic_rows(records)
+        compatible = build_report(
+            records, profile=table_profile or "opennpu_raw", baselines=baselines
+        )
+    rows = tables(records, baselines=baselines)[0]
     if summary is None:
         summary = summarize(
             records, rows=rows, policy=(metadata or {}).get("report_policy")
         )
     raw_rows = [raw_export_row(row) for row in rows]
     directory.mkdir(parents=True, exist_ok=True)
-    diagnostic_file = "diagnostics.csv"
-    if wanted(
-        diagnostic_file,
-        "csv" in selected
-        and (bool(diagnostics) or (directory / diagnostic_file).is_file()),
+    for suffix, delimiter, encoding in (
+        ("csv", ",", "utf-8-sig"),
+        ("tsv", "\t", "utf-8"),
     ):
-        _text(
-            directory / diagnostic_file,
-            table_text(diagnostics, DIAGNOSTIC_FIELDS, delimiter=","),
-            "utf-8-sig",
-        )
-    for name, values, fields in (
-        ("results", raw_rows, RAW_FIELDS),
-        ("metrics", metrics, METRIC_FIELDS),
-    ):
-        for suffix, delimiter, encoding in (
-            ("csv", ",", "utf-8-sig"),
-            ("tsv", "\t", "utf-8"),
-        ):
-            filename = name + "." + suffix
-            requested = (
-                suffix in selected
-                and (name == "metrics" or not table_profile)
-                and (not _primary_only or name != "metrics")
+        filename = "results." + suffix
+        if wanted(filename, suffix in selected and not table_profile):
+            _text(
+                directory / filename,
+                table_text(raw_rows, RAW_FIELDS, delimiter=delimiter),
+                encoding,
             )
-            if wanted(filename, requested):
-                _text(
-                    directory / filename,
-                    table_text(values, fields, delimiter=delimiter),
-                    encoding,
-                )
     if wanted("records.json", "json" in selected):
         atomic_json(
             directory / "records.json",
@@ -638,7 +613,7 @@ def export_records(
             directory,
             source=metadata,
             selected=selected if table_profile else frozenset(),
-            refresh_existing=_refresh_existing,
+            refresh_existing=refresh,
         )
     from .ort.diagnostics import warn_diagnostics
 
@@ -647,7 +622,7 @@ def export_records(
 
 
 def summarize(records, *, rows=None, policy=None):
-    """Summarize the selected cohort identically for generated and replayed models."""
+    """Summarize the selected cohort identically for generated and supplied models."""
     rows = tables(records)[0] if rows is None else rows
     policy = report_policy(policy)
     config = dict(

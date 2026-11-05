@@ -3,44 +3,6 @@
 import copy
 from importlib.metadata import version, PackageNotFoundError
 
-CURRENT = "current_v1"
-HISTORICAL = "historical_cnn33_v1"
-NUMPY_TOPK = "numpy_argsort_v1"
-PROFILES = (CURRENT, HISTORICAL, NUMPY_TOPK, "face_all_boxes_v1", "mask_area_v1")
-CLASSIFIERS = frozenset(
-    (
-        "resnet18",
-        "resnet50",
-        "resnet101",
-        "mobilenet_v1",
-        "mobilenet_v2",
-        "mobilenet_v3_large",
-        "efficientnet_b0",
-        "efficientnet_lite4",
-        "inception_v3",
-        "shufflenet_v2_x1_0",
-        "squeezenet1_1",
-        "vgg16",
-    )
-)
-FAMILIES = {
-    "yolox": "yolox",
-    "yolov7_face": "yolov7_face",
-    "yolov5s_seg": "yolov5s_seg",
-}
-MODELS = frozenset(FAMILIES)
-
-
-# Compatibility inputs describe an implementation, never a moving default.
-SEMANTIC = {
-    "numpy_topk_v1": NUMPY_TOPK,
-    "stable_topk_v1": CURRENT,
-    "yolox_torch_nms_v1": HISTORICAL,
-    "yolov7_face_clip_first4_v1": HISTORICAL,
-    "yolov7_face_clip_all_v1": "face_all_boxes_v1",
-    "yolov5_seg_scaled_coeff_bbox_area_v1": HISTORICAL,
-    "yolov5_seg_scaled_coeff_mask_area_v1": "mask_area_v1",
-}
 SPECIAL = {
     "yolox": "yolox_torch_nms_v1",
     "yolov7_face": "yolov7_face_clip_first4_v1",
@@ -61,24 +23,32 @@ GENERIC = {
     "segmentation_resize": "segmentation_resize_v1",
     "face_verification": "lfw_flip_ten_fold_v1",
 }
-NAMES = tuple(dict.fromkeys((*SEMANTIC, *GENERIC.values())))
+ALTERNATIVES = {
+    "stable_topk_v1": "numpy_topk_v1",
+    "yolov7_face_clip_first4_v1": "yolov7_face_clip_all_v1",
+    "yolov5_seg_scaled_coeff_bbox_area_v1": "yolov5_seg_scaled_coeff_mask_area_v1",
+}
+NAMES = frozenset((*SPECIAL.values(), *GENERIC.values(), *ALTERNATIVES.values()))
 
-PROFILES = (*PROFILES, *NAMES)
 
-
-def decoder_family(model):
-    return FAMILIES.get(model, model)
+def default_profile(model, kind):
+    return SPECIAL.get(model) or GENERIC[kind]
 
 
 def validate_profile(model, profile, kind=None):
-    from .evaluation_contracts import legacy_profile
-
-    if kind is None and profile in NAMES:
+    if not isinstance(profile, str) or profile not in NAMES:
+        raise ValueError("Unknown evaluation profile: " + str(profile))
+    if kind is None:
         from .spec import ModelSpec, model_names
 
         if model in model_names():
             kind = ModelSpec.load(model).recipe["decode"]["kind"]
-    legacy_profile(model, profile, kind)
+        else:
+            # Check a custom model's decoder when its local recipe is loaded.
+            return
+    default = default_profile(model, kind)
+    if profile not in (default, ALTERNATIVES.get(default)):
+        raise ValueError(f"Evaluation profile {profile} is not verified for {model}")
 
 
 def apply_profile(recipe, profile):
@@ -89,8 +59,11 @@ def apply_profile(recipe, profile):
 
 
 def profile_name(recipe):
-    name = recipe["decode"].get("profile", CURRENT)
-    validate_profile(recipe["name"], name, recipe["decode"]["kind"])
+    model = recipe.get("name", "")
+    name = recipe["decode"].get(
+        "profile", default_profile(model, recipe["decode"]["kind"])
+    )
+    validate_profile(model, name, recipe["decode"]["kind"])
     return name
 
 
@@ -122,13 +95,3 @@ def identity(recipe):
         mask_area=mask_area(recipe),
         dependencies=dependencies,
     )
-
-
-def decode(outputs, recipe, meta, categories):
-    """Compatibility entry point. Evaluators resolve the callable at construction."""
-    from .evaluation_contracts import resolve
-
-    contract = resolve(recipe)
-    if contract.postprocess is None:
-        raise ValueError("This task uses a dedicated evaluator")
-    return contract.postprocess(outputs, recipe, meta, categories)

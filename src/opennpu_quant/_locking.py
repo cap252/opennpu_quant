@@ -91,6 +91,33 @@ def run_directory_lock(directory, *, fixed):
         yield
 
 
+# Files that mark a folder as a run folder or archived run snapshot of any
+# execution format. Report folders never contain them.
+RUN_MARKERS = (
+    ".state/settings.json",
+    "effective_config.json",
+    "run.json",
+    "status.json",
+)
+
+
+def check_report_destination(source, destination):
+    """Reject report outputs that would overwrite another run's files."""
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    if destination == source:
+        return
+    if ".state" in destination.parts:
+        raise ValueError(
+            f"Report output is inside a run's .state folder: {destination}. "
+            "Choose a separate folder for reports"
+        )
+    if any((destination / marker).exists() for marker in RUN_MARKERS):
+        raise ValueError(
+            f"Report output is another run folder: {destination}. "
+            "Choose a separate folder for reports"
+        )
+
+
 @contextmanager
 def report_output_lock(source, destination):
     """Lock a distinct report destination while the caller holds the source lock."""
@@ -98,7 +125,10 @@ def report_output_lock(source, destination):
     if destination == source:
         yield
     else:
+        check_report_destination(source, destination)
         with _directory_lock(destination, create=True), RunLock(destination / ".lock"):
+            # The destination may have become a run while acquiring its lock.
+            check_report_destination(source, destination)
             yield
 
 

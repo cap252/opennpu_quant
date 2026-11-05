@@ -49,7 +49,7 @@ def fixture():
         run_id="sweep",
         cohort_id="sweep",
         condition="fp32",
-        state="evaluated",
+        state="completed",
         verified=True,
         full_validation=True,
         split="validation",

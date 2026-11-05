@@ -189,17 +189,17 @@ class ReuseGuidanceTests(unittest.TestCase):
 
     def config_conflict(self, before, after):
         out = self.paths.runs / after["name"]
-        recorded = out / "effective_config.json"
-        atomic_json(recorded, before)
+        recorded = out / ".state/settings.json"
+        atomic_json(recorded, dict(schema_version=2, mode="generate", config=before))
         marker = out / "prior-result.json"
         atomic_json(marker, {"measured": "keep"})
         saved = recorded.read_bytes(), marker.read_bytes()
         with patch("opennpu_quant.runner._run_model") as model_run:
             with self.assertRaises(ValueError) as caught:
-                run(after, self.paths)
+                run(after, self.paths, formats="csv,json,md")
             model_run.assert_not_called()
         self.assertEqual(saved, (recorded.read_bytes(), marker.read_bytes()))
-        self.assertFalse((out / "status.json").exists())
+        self.assertFalse((out / ".state/status.json").exists())
         message = str(caught.exception)
         self.assertIn("--output", message)
         self.assertIn("--force", message)
@@ -252,16 +252,16 @@ class ReuseGuidanceTests(unittest.TestCase):
 
         paths, config = fixture(self.root)
         with contextlib.redirect_stdout(io.StringIO()):
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
         out = paths.runs / config["name"]
-        complete = out / "toy/pot_rtn/complete.json"
+        complete = out / ".state/toy/pot_rtn/complete.json"
         original = complete.read_bytes()
         with (
             patch("opennpu_quant.runner.calibrate") as calibration,
             patch("opennpu_quant.runner.quantize") as quantization,
             patch("opennpu_quant.runner.evaluate") as evaluation,
         ):
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             calibration.assert_not_called()
             quantization.assert_not_called()
             evaluation.assert_not_called()
@@ -272,9 +272,9 @@ class ReuseGuidanceTests(unittest.TestCase):
         )
         self.assertEqual(
             "reused",
-            read_json(out / "status.json")["models"]["toy"]["conditions"]["pot_rtn"][
-                "state"
-            ],
+            read_json(out / ".state/status.json")["models"]["toy"]["conditions"][
+                "pot_rtn"
+            ]["state"],
         )
 
     def test_opaque_identity_conflict_lists_candidates_without_inventing_cause(self):
@@ -282,7 +282,7 @@ class ReuseGuidanceTests(unittest.TestCase):
 
         paths, config = fixture(self.root)
         with contextlib.redirect_stdout(io.StringIO()):
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
         out = paths.runs / config["name"]
         saved = {
             p: p.read_bytes()
@@ -291,7 +291,7 @@ class ReuseGuidanceTests(unittest.TestCase):
         }
         with patch("opennpu_quant.runner.code_identity", return_value="different-code"):
             with self.assertRaises(ValueError) as caught:
-                run(config, paths)
+                run(config, paths, formats="csv,json,md")
         message = str(caught.exception)
         for word in (
             "identity",
@@ -308,23 +308,26 @@ class ReuseGuidanceTests(unittest.TestCase):
         self.assertIn("--force", message)
         self.assertLess(message.index("--output"), message.index("--force"))
         self.assertEqual(saved, {p: p.read_bytes() for p in saved})
-        self.assertEqual("failed", read_json(out / "status.json")["state"])
+        self.assertEqual("failed", read_json(out / ".state/status.json")["state"])
 
     def test_force_keeps_existing_bypass_behavior(self):
         before = copy.deepcopy(self.config)
         before["evaluation"]["limit"] = 1
         out = self.paths.runs / self.config["name"]
-        atomic_json(out / "effective_config.json", before)
+        atomic_json(
+            out / ".state/settings.json",
+            dict(schema_version=2, mode="generate", config=before),
+        )
         with (
             patch("opennpu_quant.runner._run_model") as model_run,
             patch(
-                "opennpu_quant.runner._report_locked",
+                "opennpu_quant.runner.report_from_settings_locked",
                 return_value={"mean_recovery": {}},
             ),
         ):
-            run(self.config, self.paths, force=True)
+            run(self.config, self.paths, force=True, formats="csv,json,md")
         self.assertEqual(len(self.config["models"]), model_run.call_count)
-        self.assertEqual(self.config, read_json(out / "effective_config.json"))
+        self.assertEqual(self.config, read_json(out / ".state/settings.json")["config"])
 
 
 if __name__ == "__main__":

@@ -91,8 +91,8 @@ class SegmentationPredictionTests(unittest.TestCase):
                 config["name"] = "save_on" if enabled else "save_off"
                 config["output"]["save_predictions"] = enabled
                 with patch.object(runner, "ModelEvaluator", side_effect=capture):
-                    runner.run(config, paths)
-                out = paths.runs / config["name"] / "toy/fp32"
+                    runner.run(config, paths, formats="csv,json,md")
+                out = paths.runs / config["name"] / ".state/toy/fp32"
                 records.append(read_json(out / "result.json"))
                 matrices.append(captured[-1].metric.confusion.copy())
                 self.assertEqual(enabled, (out / "predictions.jsonl.gz").exists())
@@ -122,5 +122,8 @@ class SegmentationPredictionTests(unittest.TestCase):
                 self.assertTrue(((labels >= 0) & (labels < 21)).all())
                 replay.update({"labels": labels}, sample)
             np.testing.assert_array_equal(matrices[1], replay.confusion)
-            self.assertEqual(records[1]["metrics"], replay.finalize())
+            self.assertEqual(
+                {k: v["value"] for k, v in records[1]["metrics"].items()},
+                replay.finalize(),
+            )
             self.assertEqual(records[1]["metric_details"], replay.metric_details)

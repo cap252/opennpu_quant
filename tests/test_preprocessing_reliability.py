@@ -1,6 +1,10 @@
 """F03: custom code has no closed dependency boundary; never reuse its feeds."""
 
 import sys
+import json
+import os
+import subprocess
+import yaml
 import tempfile
 from pathlib import Path
 from types import ModuleType
@@ -13,9 +17,81 @@ from opennpu_quant.data.samples import Dataset
 from opennpu_quant.models.bundle import ModelBundle
 from opennpu_quant.models.spec import ModelSpec
 from opennpu_quant._feeds import feed_digest
+from opennpu_quant._io import read_json
 
 
 class PreprocessingReliabilityTests(unittest.TestCase):
+    def test_custom_preprocessing_cli_requires_explicit_cache_and_reuse_choices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths, config = fixture(root)
+            recipe_file = paths.models / "toy/recipe.yaml"
+            recipe = yaml.safe_load(recipe_file.read_text())
+            settings = recipe["preprocess"]
+            recipe["preprocess"] = {"kind": "custom_cli:transform"}
+            recipe_file.write_text(yaml.safe_dump(recipe))
+            (root / "custom_cli.py").write_text(
+                "from opennpu_quant.models.preprocess import preprocess\n"
+                "def transform(image, settings, layout):\n"
+                f"    return preprocess(image, {settings!r}, layout)\n"
+            )
+            config_file = root / "experiment.yaml"
+            config_file.write_text(yaml.safe_dump(config))
+            command = [
+                sys.executable,
+                "-B",
+                "-m",
+                "opennpu_quant",
+                "run",
+                "-c",
+                str(config_file),
+                "--home",
+                str(root),
+                "--json",
+            ]
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.pathsep.join((str(root), env.get("PYTHONPATH", "")))
+
+            def execute(*extra):
+                return subprocess.run(
+                    [*command, *extra],
+                    cwd=root,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+
+            refused = execute()
+            self.assertEqual(2, refused.returncode, refused.stderr)
+            self.assertIn("disable calibration.input_cache", refused.stderr)
+            self.assertFalse(
+                (
+                    paths.runs / config["name"] / ".state/toy/pot_rtn/complete.json"
+                ).exists()
+            )
+            out = root / "custom-run"
+            args = ("--no-input-cache", "--output", str(out))
+            accepted = execute(*args)
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            json.loads(accepted.stdout)
+            repeated = execute(*args)
+            self.assertEqual(2, repeated.returncode, repeated.stderr)
+            self.assertIn(
+                "Cannot reuse results with unidentified custom preprocessing",
+                repeated.stderr,
+            )
+            self.assertIn("--force", repeated.stderr)
+            self.assertNotIn("Traceback", repeated.stderr)
+            forced = execute(*args, "--force")
+            self.assertEqual(0, forced.returncode, forced.stderr)
+            json.loads(forced.stdout)
+            states = read_json(out / config["name"] / ".state/status.json")["models"][
+                "toy"
+            ]["conditions"]
+            self.assertEqual({"fp32", "pot_rtn"}, set(states))
+            self.assertTrue(all(s["state"] == "completed" for s in states.values()))
+
     def test_f03_same_name_body_helper_and_global_changes_refuse_cache(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

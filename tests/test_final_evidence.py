@@ -27,14 +27,14 @@ class FinalEvidenceTests(unittest.TestCase):
                     h.make_tensor_value_info("alternate_scores", 1, [1, 6])
                 )
                 onnx.save(model, post)
-                runner.run(config, paths)
+                runner.run(config, paths, formats="csv,json,md")
                 out = paths.runs / config["name"]
                 base = next(
                     r
                     for r in read_json(out / "records.json")["records"]
                     if r["condition"] == "fp32"
                 )
-                before = read_json(out / "toy/fp32/result.json")
+                before = read_json(out / ".state/toy/fp32/result.json")
                 changed = copy.deepcopy(config)
                 changed["name"] = setting
                 if setting == "decode":
@@ -44,14 +44,14 @@ class FinalEvidenceTests(unittest.TestCase):
                     recipe_path.write_text(yaml.safe_dump(recipe))
                 else:
                     changed["evaluation"]["limit"] = 1
-                runner.run(changed, paths)
+                runner.run(changed, paths, formats="csv,json,md")
                 after_dir = paths.runs / changed["name"]
                 q = next(
                     r
                     for r in read_json(after_dir / "records.json")["records"]
                     if r["condition"] == "pot_rtn"
                 )
-                after = read_json(after_dir / "toy/pot_rtn/result.json")
+                after = read_json(after_dir / ".state/toy/pot_rtn/result.json")
                 self.assertEqual(before["graph_identities"], after["graph_identities"])
                 self.assertEqual(
                     before["preprocessing_identity"], after["preprocessing_identity"]

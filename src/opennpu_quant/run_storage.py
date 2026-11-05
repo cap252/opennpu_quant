@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from uuid import uuid4
 
-from ._io import atomic_json, object_hash, read_json, sha256
+from ._io import atomic_json, object_hash, read_json, sha256, now
 from .graph.model import load_model, save_model
 from .quant.api import QuantizationResult
 from .quant.config import QuantizationConfig
@@ -14,6 +14,11 @@ from .quant.parameters import verify_parameters
 
 
 def read_generated(directory, identity, source_identity, input_identity):
+    """Read a verified QDQ model as (result, record), or None without completion proof.
+
+    Changed model bytes, calibration inputs or generation evidence raise an error.
+    This verifies model generation, not a completed evaluation.
+    """
     proof_path = directory / "complete.json"
     if not proof_path.is_file():
         return None
@@ -83,7 +88,12 @@ def link_model(source, destination):
     temporary.replace(destination)
 
 
-def evaluation_changes_only(changes):
+def can_archive_for_config_changes(changes):
+    """Allow these config changes after preserving the preceding evaluation.
+
+    This is not approval to reuse a generated model. Changes to runtime or
+    selected conditions can also change generation identity, checked separately.
+    """
     return all(
         path.split(".")[0]
         in {
@@ -156,7 +166,11 @@ def finish_archive(output):
 
 
 def archive_evaluation(output, config):
-    names = list(config["models"]) + ["effective_config.json", "status.json"]
+    names = list(config["models"]) + [
+        "settings.json",
+        "effective_config.json",
+        "status.json",
+    ]
     names += [
         p.name
         for p in output.iterdir()
@@ -182,7 +196,7 @@ def archive_evaluation(output, config):
 
 def restore_evaluation(output, model, condition, identity):
     """Restore a verified archived condition without changing its measurement record."""
-    from .report import _verified
+    from .run_records import verified_record
 
     destination = output / model / condition
     if destination.exists():
@@ -195,10 +209,17 @@ def restore_evaluation(output, model, condition, identity):
             proof = read_json(source / "complete.json")
             if proof.get("identity") != identity:
                 continue
-            config = read_json(archive / "effective_config.json")
             status = read_json(archive / "status.json")
-            if not _verified(source / "result.json", config, status):
+            if status.get("schema_version") != 2:
+                # Older measurements remain reportable, not a new model cache.
                 continue
+            current = status["models"][model]["conditions"][condition]
+            if (
+                current["state"] not in ("completed", "reused")
+                or current["identity"] != identity
+            ):
+                continue
+            verified_record(source, current)
         except (ValueError, KeyError, TypeError, OSError):
             continue
         # Never follow a substituted archive directory or artifact symlink.
@@ -219,12 +240,121 @@ def restore_evaluation(output, model, condition, identity):
                     shutil.copyfile(source_file, destination_file)
 
             shutil.copytree(source, pending, copy_function=copy_artifact)
-            from .report import verify_artifacts
+            from .run_records import verify_artifacts
 
-            if not _verified(
-                source / "result.json", config, status
-            ) or not verify_artifacts(pending, proof):
+            verified_record(source, current)
+            if not verify_artifacts(pending, proof):
                 raise ValueError("Evaluation archive changed during restoration")
             pending.replace(destination)
         return True
     return False
+
+
+def archive_condition(directory, state, attempt):
+    """Preserve a condition before replacement under the caller's run lock."""
+    destination = (
+        state / ".evaluations" / attempt / directory.parent.name / directory.name
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    directory.rename(destination)
+    return destination
+
+
+def new_status(conditions, config):
+    """The same condition hierarchy for generated and supplied models."""
+    from ._identity import run_config_identity
+
+    return dict(
+        config_identity=run_config_identity(config),
+        schema_version=2,
+        state="running",
+        attempt_id=uuid4().hex,
+        started=now(),
+        finished=None,
+        models={
+            model: dict(
+                state="pending",
+                conditions={name: dict(state="pending") for name in selected},
+            )
+            for model, selected in conditions.items()
+        },
+    )
+
+
+def fail_condition(current, error, *, preparing=False):
+    from .exceptions import condition_state, error_record
+
+    current.update(
+        state=condition_state(error, preparing=preparing), error=error_record(error)
+    )
+
+
+def condition_counts(status):
+    return {
+        state: sum(
+            row["state"] in ("completed", "reused")
+            if state == "completed"
+            else row["state"] == state
+            for model in status["models"].values()
+            for row in model["conditions"].values()
+        )
+        for state in ("completed", "pending", "failed")
+    }
+
+
+def _combined_state(states):
+    return next(
+        (s for s in ("interrupted", "failed", "running", "pending") if s in states),
+        "completed",
+    )
+
+
+def model_state(model):
+    """The state of a model, from the states of its conditions."""
+    return _combined_state({row["state"] for row in model["conditions"].values()})
+
+
+def finish_status(status):
+    counts = condition_counts(status)
+    for model in status["models"].values():
+        model["state"] = model_state(model)
+    status.update(
+        state=_combined_state({m["state"] for m in status["models"].values()}),
+        finished=now(),
+    )
+    return counts
+
+
+def write_completed(directory, record, *, model_hash=None, files=None, generation=None):
+    """Publish a finished evaluation's evidence last under the caller's run lock.
+
+    A requested subset also has this proof. Dataset coverage remains in the
+    record's complete and full_evaluation fields.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "complete.json").unlink(missing_ok=True)
+    atomic_json(directory / "result.json", record)
+    proof = dict(
+        identity=record["evidence"]["identity"],
+        result_sha256=sha256(directory / "result.json"),
+        files=files or {},
+    )
+    if model_hash is not None:
+        proof["model_sha256"] = model_hash
+    if generation:
+        proof["calibration_generation"] = generation
+    atomic_json(directory / "complete.json", proof)
+
+
+def guard_run(root, mode):
+    if any(
+        (root / n).exists() for n in ("effective_config.json", "run.json", "prepared")
+    ):
+        raise ValueError(
+            "Output contains an older execution format. Use a new output directory"
+        )
+    stored = root / ".state/settings.json"
+    if stored.exists() and read_json(stored).get("mode") != mode:
+        raise ValueError(
+            "Output directory contains a different execution format. Use a new output directory"
+        )

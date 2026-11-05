@@ -105,14 +105,13 @@ Use the following sections when you need an option beyond the common settings. T
 
 The experiment file is validated when loaded. Supported CLI options replace the corresponding values, and the effective configuration is validated again. Options that select several models or datasets can update more than one key.
 
-A local `recipe.yaml` supplies the model bundle's input and graph settings. Packaged models still use their packaged evaluation profile by default. Choose another profile explicitly with `evaluation.profiles.<model>` or `--evaluation-profile`. See [Precedence and local recipes](evaluation-profiles.md#precedence-and-local-recipes).
+A local `recipe.yaml` supplies the model bundle's input and graph settings. Packaged models still use their packaged evaluation profile by default. Choose another profile explicitly with `evaluation.profiles.<model>`. See [Precedence and local recipes](evaluation-profiles.md#precedence-and-local-recipes).
 
 | Option | Configuration key |
 |---|---|
 | `--device` | `runtime.device` |
 | `--limit` | `evaluation.limit` |
-| `--evaluation-profile` | `evaluation.profiles` for all selected models (comparison only) |
-| `--calibration-samples` | All `calibration.samples.*` |
+| `--calibration-samples` | `calibration.samples.*` (all datasets) |
 | `--adaround-steps` | `adaround.steps` |
 | `--save-models` | `output.save_qdq_models` |
 | `--save-predictions` | `output.save_predictions` |
@@ -188,7 +187,7 @@ These keys belong to the experiment file. Some keys abbreviate a repeated prefix
 
 `decode.*` belongs to the model recipe. Other configuration keys below belong to the experiment. `--table-profile` is a command-line report option of `run`, `report` and `results`.
 
-Generation runs use model-recipe profiles. Evaluation configs use their catalog profiles. `--evaluation-profile` explicitly overrides either ([Evaluation profiles](evaluation-profiles.md)).
+Generation runs use model-recipe profiles. Evaluation configs use their catalog profiles. Set `evaluation.profiles.<model>` to override either ([Evaluation profiles](evaluation-profiles.md)).
 
 | Key | Default and allowed values | Effect of a change |
 | --- | --- | --- |

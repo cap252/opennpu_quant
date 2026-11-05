@@ -5,6 +5,7 @@ import numpy as np
 from ..ort.config import OrtConfig
 from ..ort.session import create_session, environment
 from ..ort.fetch import run_tensors
+from ..exceptions import InvalidOutputError
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ def _evaluate_stream(
     record=None,
     profile_model=None,
 ):
-    """Shared inference/scoring loop; replay supplies evidence I/O around each sample."""
+    """Shared inference/scoring loop. ``fetch`` and ``record`` wrap each sample's I/O."""
     _validate_counts(expected_samples, limit)
     names = [v.name for v in session.get_outputs()]
     seen = set()
@@ -108,9 +109,9 @@ def _evaluate_stream(
             else dict(zip(names, run_tensors(session, names, sample.feeds)))
         )
         if set(values) != set(names):
-            raise ValueError("Output names differ from the session")
+            raise InvalidOutputError("Output names differ from the session")
         if any(not np.isfinite(v).all() for v in values.values()):
-            raise ValueError("Nonfinite prediction")
+            raise InvalidOutputError("Nonfinite prediction")
         if placement is None and profile_model is not None:
             from ..ort.profile import profile_sample
 
@@ -129,7 +130,7 @@ def _evaluate_stream(
         raise ValueError("Missing evaluation samples")
     metrics = dict(evaluator.finalize())
     if any(not np.isfinite(v) for v in metrics.values()):
-        raise ValueError("Nonfinite metric")
+        raise InvalidOutputError("Nonfinite metric")
     runtime = dict(**environment(ort), placement=placement)
     if hasattr(evaluator, "contract"):
         runtime["evaluation_contract"] = evaluator.contract.identity()

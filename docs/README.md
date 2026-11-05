@@ -19,7 +19,7 @@ Start with the [README](../README.md) to install the tool, run the demo, check s
 | [Configuration reference](configuration.md) | Choose a preset, configure multiple models, locate settings and look up detailed options |
 | [Model reference](model-reference.md) | Inputs, preprocessing, decoders, model groups and original settings for every packaged model |
 | [Evaluation profiles](evaluation-profiles.md) | Model-specific postprocessing behavior and how to compare alternatives |
-| [Validation scope and limitations](validation.md) | How to read a result, what has been verified and known limitations |
+| [Validation scope and limitations](validation.md) | How to read a result and known limitations |
 
 ## Internals
 

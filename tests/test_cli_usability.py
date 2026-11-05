@@ -358,7 +358,7 @@ class CliUsabilityTests(unittest.TestCase):
         model_dir.mkdir(parents=True)
         recipe = copy.deepcopy(ModelSpec.load("resnet18").recipe)
         recipe["name"] = "local_toy"
-        recipe["decode"]["profile"] = "current_v1"
+        recipe["decode"]["profile"] = "stable_topk_v1"
         (model_dir / "recipe.yaml").write_text(yaml.safe_dump(recipe))
         code, output, error = self.invoke(
             [

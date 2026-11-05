@@ -21,7 +21,7 @@ preprocess:
   stride: 32
   rectangular: false
 decode:
-  profile: historical_cnn33_v1
+  profile: yolov7_face_clip_first4_v1
   kind: yolo_face
   output: predictions
   confidence_threshold: 0.01

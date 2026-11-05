@@ -8,7 +8,7 @@ import numpy as np
 from opennpu_quant.models.adapter import ModelEvaluator
 from opennpu_quant.models.contracts import EvaluationSample
 from opennpu_quant.models.evaluation_contracts import resolve
-from opennpu_quant.models.evaluation_profiles import apply_profile, CURRENT, HISTORICAL
+from opennpu_quant.models.evaluation_profiles import apply_profile
 from opennpu_quant.models.spec import ModelSpec, model_names
 
 
@@ -38,16 +38,15 @@ class EvaluationContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(cfg)
 
-    def test_current_keeps_generic_behavior_instead_of_becoming_default(self):
-        for model in (
-            "yolox",
-            "yolov7_face",
-            "yolov5s_seg",
-        ):
+    def test_ambiguous_aliases_are_rejected(self):
+        for model in model_names():
             recipe = ModelSpec.load(model).recipe
-            self.assertNotEqual(
-                resolve(recipe).name, resolve(apply_profile(recipe, CURRENT)).name
-            )
+            for alias in ("current_v1", "historical_cnn33_v1", "numpy_argsort_v1"):
+                with (
+                    self.subTest(model=model, alias=alias),
+                    self.assertRaisesRegex(ValueError, "Unknown evaluation profile"),
+                ):
+                    apply_profile(recipe, alias)
         for model in model_names():
             recipe = ModelSpec.load(model).recipe
             with self.subTest(model=model):
@@ -68,17 +67,13 @@ class EvaluationContractTests(unittest.TestCase):
         )
         values = []
         for name in (
-            HISTORICAL,
             "yolov7_face_clip_first4_v1",
-            "face_all_boxes_v1",
             "yolov7_face_clip_all_v1",
         ):
             r = apply_profile(recipe, name)
             values.append(resolve(r).postprocess({"predictions": p}, r, meta, []))
-        self.assertEqual(values[0], values[1])
-        self.assertEqual(values[2], values[3])
-        self.assertEqual(values[0][:4], values[2][:4])
-        self.assertNotEqual(values[0][4:], values[2][4:])
+        self.assertEqual(values[0][:4], values[1][:4])
+        self.assertNotEqual(values[0][4:], values[1][4:])
         np.testing.assert_array_equal(p, before)
 
     def test_python_replacement_receives_host_outputs_and_reuses_metric(self):
@@ -100,7 +95,7 @@ class EvaluationContractTests(unittest.TestCase):
         bundle = SimpleNamespace(spec=ModelSpec(recipe), finish=finish)
         evaluator = ModelEvaluator(bundle, SimpleNamespace(), postprocess=replacement)
         with patch(
-            "opennpu_quant.models.evaluation_contracts.legacy_profile",
+            "opennpu_quant.models.evaluation_contracts.profile_name",
             side_effect=AssertionError("per-sample resolution"),
         ):
             evaluator.update(

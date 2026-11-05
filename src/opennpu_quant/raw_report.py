@@ -27,9 +27,9 @@ def validate_profile(profile):
         raise ValueError("Unknown table profile: " + str(profile))
 
 
-def build_report(records, *, profile="opennpu_raw"):
+def build_report(records, *, profile="opennpu_raw", baselines=None):
     validate_profile(profile)
-    rows, _ = tables(records)
+    rows, _ = tables(records, baselines=baselines)
     groups = {"full": [], "partial": []}
     metadata = []
 
@@ -68,7 +68,7 @@ def build_report(records, *, profile="opennpu_raw"):
             ),
             pair_count=record.get("metric_details", {}).get("pair_count"),
             evaluation_profile=record.get("evaluation_profile")
-            or (decode.get("profile", "current_v1") if decode else None),
+            or decode.get("profile"),
             evidence=proof,
             environment_diagnostic=row["environment_diagnostic"],
             exported_to=None,

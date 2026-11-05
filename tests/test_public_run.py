@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from opennpu_quant._io import atomic_json, read_json, sha256
 from opennpu_quant.cli import THREAD_VARIABLES, main
-from opennpu_quant.public_run import _evaluation_records, evaluate_config, generate
+from opennpu_quant.public_run import evaluate_config, generate
+from opennpu_quant.run_records import current_records
 from opennpu_quant.report import report
 from tests.test_result_reliability import fixture
 
@@ -27,7 +28,7 @@ def evaluation_fixture(root):
         (paths.models / "toy/recipe.yaml").read_text()
     )
     fp = paths.models / "toy/network.onnx"
-    q = paths.runs / config["name"] / "toy/pot_rtn/model.onnx"
+    q = paths.runs / config["name"] / "models/toy/pot_rtn/network.onnx"
     from opennpu_quant.configuration import scheme_for_condition
 
     catalog = {
@@ -95,6 +96,100 @@ def first_profile_drifts():
 
 
 class PublicRunTests(unittest.TestCase):
+    def test_raw_cli_selection_replaces_yaml_selection(self):
+        cases = (
+            ({"raw_sample_ids": ["3"]}, ["--raw-samples", "1"], ["2"]),
+            ({"raw_samples": 1}, ["--raw-sample-ids", "3"], ["3"]),
+            ({"raw_sample_ids": ["2"]}, ["--raw-samples", "0"], []),
+            ({"raw_samples": 1}, ["--raw-samples", "2"], ["2", "3"]),
+            ({}, ["--raw-samples", "1"], ["2"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths, config, _ = evaluation_fixture(root)
+            config["conditions"] = ["fp32"]
+            for i, (output, flags, wanted_ids) in enumerate(cases):
+                with self.subTest(output=output, flags=flags):
+                    config["output"] = output
+                    config["name"] = "capture-" + str(i)
+                    config_file = root / "evaluate.json"
+                    atomic_json(config_file, config)
+                    command = [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "opennpu_quant",
+                        "run",
+                        "-c",
+                        str(config_file),
+                        "--home",
+                        str(root),
+                        "--local-config",
+                        str(root / "local.yaml"),
+                        "--json",
+                        *flags,
+                    ]
+                    for dry_run in (True, False):
+                        process = subprocess.run(
+                            command + (["--dry-run"] if dry_run else []),
+                            cwd=root,
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                        )
+                        self.assertEqual(0, process.returncode, process.stderr)
+                        json.loads(process.stdout)
+                    out = paths.runs / config["name"]
+                    captures = list(out.rglob("raw.json"))
+                    if wanted_ids:
+                        self.assertEqual(1, len(captures))
+                        saved = read_json(captures[0])
+                        self.assertEqual(
+                            wanted_ids, [row["id"] for row in saved["samples"]]
+                        )
+                        self.assertTrue(
+                            all(
+                                (captures[0].parent / f).is_file()
+                                for f in saved["files"]
+                            )
+                        )
+                    else:
+                        self.assertEqual([], captures)
+                        self.assertFalse(list(out.rglob("*.npz")))
+
+    def test_evaluation_rejects_empty_raw_id_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths, config, _ = evaluation_fixture(root)
+            config["output"] = {"raw_samples": 1}
+            config_file = root / "evaluate.json"
+            atomic_json(config_file, config)
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "opennpu_quant",
+                    "run",
+                    "-c",
+                    str(config_file),
+                    "--home",
+                    str(root),
+                    "--local-config",
+                    str(root / "local.yaml"),
+                    "--raw-sample-ids",
+                    "",
+                    "--json",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(2, process.returncode, process.stderr)
+            self.assertIn("--raw-sample-ids must not be empty", process.stderr)
+            self.assertFalse((paths.runs / config["name"]).exists())
+
     def test_generation_has_minimal_outputs_and_models_before_evaluation(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths, config = fixture(Path(tmp))
@@ -209,6 +304,76 @@ class PublicRunTests(unittest.TestCase):
             self.assertEqual(whole, (out / "settings.json").read_bytes())
             self.assertEqual(2, len(run_settings["measurements"]))
 
+    def test_memory_capacity_changes_reuse_completed_results_and_record_new_settings(
+        self,
+    ):
+        from copy import deepcopy
+        from opennpu_quant.public_run import _prepare_evaluation
+        from opennpu_quant.models.spec import ModelSpec
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths, config, catalog = evaluation_fixture(root)
+            initial = evaluate_config(config, catalog, root, paths)
+            self.assertEqual(2, initial["execution"]["completed"])
+            state = paths.runs / config["name"] / ".state"
+            files = {p: p.read_bytes() for p in state.glob("toy/*/*.json")}
+            for capacity in (6 * 1024**3, 8 * 1024**3):
+                changed = deepcopy(catalog)
+                for variant in changed["models"]["toy"]["variants"].values():
+                    variant["runtime"] = dict(gpu_mem_limit=capacity)
+                definition = changed["models"]["toy"]
+                actual = _prepare_evaluation(
+                    ModelSpec(definition["recipe"]),
+                    definition,
+                    definition["variants"]["fp32"],
+                    config,
+                    root,
+                    paths,
+                    False,
+                )
+                stored = read_json(state / "toy/fp32/result.json")
+                self.assertEqual(stored["evidence"]["identity"], actual.identity)
+                with patch(
+                    "opennpu_quant.public_run._evaluate_prepared",
+                    side_effect=AssertionError("must reuse"),
+                ):
+                    result = evaluate_config(config, changed, root, paths)
+                self.assertEqual(2, result["execution"]["completed"])
+                status = read_json(state / "status.json")["models"]["toy"]["conditions"]
+                self.assertEqual({"reused"}, {row["state"] for row in status.values()})
+                saved = read_json(state / "settings.json")["models"]["toy"]["variants"]
+                self.assertEqual(
+                    {capacity}, {v["runtime"]["gpu_mem_limit"] for v in saved.values()}
+                )
+                self.assertEqual(files, {p: p.read_bytes() for p in files})
+
+    def test_each_run_warns_once_about_obsolete_metrics_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths, config = fixture(root)
+            folder = paths.runs / config["name"]
+            folder.mkdir(parents=True)
+            (folder / "metrics.csv").write_text("run_id,model\n")
+            with self.assertLogs("opennpu_quant.results", "WARNING") as logs:
+                generate(config, paths, formats="csv")
+            self.assertEqual(1, len(logs.records))
+            self.assertIn(str(folder / "metrics.csv"), logs.records[0].getMessage())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths, config, catalog = evaluation_fixture(root)
+            folder = paths.runs / config["name"]
+            folder.mkdir(parents=True)
+            (folder / "metrics.tsv").write_text("run_id\tmodel\n")
+            # Each run in one process warns again, including a reusing rerun.
+            for _ in range(2):
+                with self.assertLogs("opennpu_quant.results", "WARNING") as logs:
+                    value = evaluate_config(config, catalog, root, paths)
+                self.assertEqual(2, value["execution"]["completed"])
+                self.assertEqual(1, len(logs.records))
+                self.assertIn(str(folder / "metrics.tsv"), logs.records[0].getMessage())
+            self.assertEqual("run_id\tmodel\n", (folder / "metrics.tsv").read_text())
+
     def test_changed_expected_count_cannot_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -223,7 +388,7 @@ class PublicRunTests(unittest.TestCase):
             self.assertTrue(all(r["state"] == "failed" for r in result["rows"]))
             self.assertIsNone(result["mean_recovery"]["pot_rtn"])
 
-    def test_missing_model_restores_and_corruption_fails(self):
+    def test_missing_model_restores_and_evaluation_records_recover(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths, cfg, cat = evaluation_fixture(root)
@@ -238,8 +403,14 @@ class PublicRunTests(unittest.TestCase):
             complete = paths.runs / cfg["name"] / ".state/toy/pot_rtn/complete.json"
             complete.write_text("{broken")
             result = evaluate_config(cfg, cat, root, paths)
-            self.assertEqual(result["execution"]["failed"], 1)
-            self.assertFalse(result["rows"][1]["complete"])
+            self.assertEqual(result["execution"]["failed"], 0)
+            self.assertTrue(result["rows"][1]["complete"])
+            archived = list(
+                (complete.parents[2] / ".evaluations").glob(
+                    "*/toy/pot_rtn/complete.json"
+                )
+            )
+            self.assertEqual(["{broken"], [p.read_text() for p in archived])
 
     def test_wrong_mode_does_not_add_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -297,11 +468,12 @@ class PublicRunTests(unittest.TestCase):
             self.assertEqual(rows[1]["state"], "unverified")
             self.assertIsNone(rows[1]["recovery_pct"])
             result = evaluate_config(cfg, cat, root, paths)
-            self.assertEqual(result["execution"]["failed"], 1)
+            self.assertEqual(result["execution"]["failed"], 0)
             self.assertEqual(result["execution"]["pending"], 0)
+            self.assertTrue((directory / "predictions.jsonl.gz").is_file())
             atomic_json(directory / "complete.json", {})
             self.assertEqual(
-                evaluate_config(cfg, cat, root, paths)["execution"]["failed"], 1
+                evaluate_config(cfg, cat, root, paths)["execution"]["failed"], 0
             )
 
     def test_generation_rejected_config_preserves_settings(self):
@@ -762,8 +934,10 @@ class PublicRunExitTests(unittest.TestCase):
                     dict(state="failed", completed=2, pending=0, failed=1),
                 )
                 out = paths.runs / config["name"]
-                state = read_json(out / ".state/status.json")["models"]["toy"]
-                self.assertIn("ONNX Runtime", state["pot_rtn"]["error"])
+                state = read_json(out / ".state/status.json")["models"]["toy"][
+                    "conditions"
+                ]
+                self.assertIn("ONNX Runtime", state["pot_rtn"]["error"]["message"])
                 self.assertEqual(state["pot_rtn"]["state"], "failed")
                 self.assertFalse((out / ".state/toy/pot_rtn/complete.json").exists())
                 self.assertTrue((out / ".state/toy/fp32/complete.json").is_file())
@@ -773,20 +947,20 @@ class PublicRunExitTests(unittest.TestCase):
                     ["completed", "failed", "completed"],
                 )
                 # Only completed evaluations claim a functional pass.
-                self.assertFalse(state["pot_rtn"]["record"]["functional_passed"])
+                self.assertNotIn("record", state["pot_rtn"])
                 passed = {
                     r["condition"]: r["functional_passed"]
-                    for r in _evaluation_records(out)[0]
+                    for r in current_records(out)[0]
                 }
                 self.assertEqual(dict(fp32=True, pot_rtn=False, later=True), passed)
                 # A status file written before this rule is corrected when read.
                 status = read_json(out / ".state/status.json")
-                status["models"]["toy"]["pot_rtn"]["record"]["functional_passed"] = True
+                status["models"]["toy"]["conditions"]["pot_rtn"]["record"] = {
+                    "functional_passed": True
+                }
                 atomic_json(out / ".state/status.json", status)
                 failed = [
-                    r
-                    for r in _evaluation_records(out)[0]
-                    if r["condition"] == "pot_rtn"
+                    r for r in current_records(out)[0] if r["condition"] == "pot_rtn"
                 ]
                 self.assertFalse(failed[0]["functional_passed"])
                 # A repeated failure still reuses the two successful conditions.
@@ -811,12 +985,12 @@ class PublicRunExitTests(unittest.TestCase):
                 dict(state="failed", completed=1, pending=0, failed=1),
             )
             out = paths.runs / config["name"]
-            state = read_json(out / ".state/status.json")["models"]["toy"]
+            state = read_json(out / ".state/status.json")["models"]["toy"]["conditions"]
             self.assertEqual("failed", state["fp32"]["state"])
+            self.assertIn("Profiled sample output", state["fp32"]["error"]["message"])
             self.assertIn(
-                "RuntimeError: Profiled sample output", state["fp32"]["error"]
+                "max absolute difference 1", state["fp32"]["error"]["message"]
             )
-            self.assertIn("Max absolute difference", state["fp32"]["error"])
             self.assertEqual("completed", state["pot_rtn"]["state"])
             self.assertFalse((out / ".state/toy/fp32/complete.json").exists())
             self.assertTrue((out / ".state/toy/pot_rtn/complete.json").is_file())
@@ -855,7 +1029,7 @@ class PublicRunExitTests(unittest.TestCase):
             toy2["recipe"]["name"] = "toy2"
             catalog["models"]["toy2"] = toy2
             for name, models, profiles, message in (
-                ("typo", ["toy"], {"toyy": "numpy_argsort_v1"}, "catalog: toyy"),
+                ("typo", ["toy"], {"toyy": "numpy_topk_v1"}, "catalog: toyy"),
                 (
                     "late",
                     ["toy", "toy2"],
@@ -886,7 +1060,7 @@ class PublicRunExitTests(unittest.TestCase):
                 config,
                 name="subset",
                 models=["toy"],
-                evaluation=dict(limit=None, profiles={"toy2": "current_v1"}),
+                evaluation=dict(limit=None, profiles={"toy2": "stable_topk_v1"}),
             )
             value = evaluate_config(cfg, catalog, root, paths)
             self.assertEqual(value["execution"]["completed"], 2)
@@ -938,7 +1112,7 @@ class PublicRunExitTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(2, exited.exception.code)
-            self.assertIn("RuntimeError: Profiled sample output", stderr.getvalue())
+            self.assertIn("Profiled sample output", stderr.getvalue())
             out = paths.runs / config["name"]
             self.assertEqual(read_json(out / ".state/status.json")["state"], "failed")
             self.assertFalse(list(out.rglob("complete.json")))

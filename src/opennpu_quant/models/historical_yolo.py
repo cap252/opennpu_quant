@@ -5,7 +5,6 @@ Source bindings and independent comparison evidence are recorded with research d
 """
 
 import numpy as np
-from .evaluation_profiles import decoder_family
 
 
 def corners(center):
@@ -20,7 +19,6 @@ def candidates(prediction, model, cfg):
     import torch
     from torchvision.ops import nms, batched_nms
 
-    model = decoder_family(model)
     expected = 21 if model == "yolov7_face" else 117 if model == "yolov5s_seg" else 85
     x = torch.from_numpy(np.array(prediction, copy=True))
     if (
@@ -73,7 +71,7 @@ def candidates(prediction, model, cfg):
     return selected[keep]
 
 
-def restored_boxes(boxes, meta, model, profile):
+def restored_boxes(boxes, meta, model, *, clip_all_boxes=False):
     value = boxes.clone()
     width, height = meta["original_size"]
     if model == "yolox":
@@ -91,11 +89,7 @@ def restored_boxes(boxes, meta, model, profile):
     else:
         value /= gain
     # Reference behavior clips rows, not columns. Comparison profiles clip all rows.
-    clipped = (
-        value[:4]
-        if model == "yolov7_face" and profile == "historical_cnn33_v1"
-        else value
-    )
+    clipped = value[:4] if model == "yolov7_face" and not clip_all_boxes else value
     clipped[:, 0].clamp_(0, width)
     clipped[:, 1].clamp_(0, height)
     clipped[:, 2].clamp_(0, width)
@@ -143,11 +137,11 @@ def masks(prototypes, coefficients, boxes, meta):
     return result
 
 
-def postprocess(outputs, recipe, meta, categories, profile):
-    model, cfg = decoder_family(recipe["name"]), recipe["decode"]
+def postprocess(outputs, recipe, meta, categories, *, clip_all_boxes=False):
+    model, cfg = recipe["name"], recipe["decode"]
     prediction = outputs[cfg["output"]]
     selected = candidates(prediction, model, cfg)
-    boxes = restored_boxes(selected[:, :4], meta, model, profile)
+    boxes = restored_boxes(selected[:, :4], meta, model, clip_all_boxes=clip_all_boxes)
     if model == "yolov7_face":
         result = []
         for box, row in zip(boxes, selected):

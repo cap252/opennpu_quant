@@ -223,7 +223,15 @@ class GenerationReuseTests(unittest.TestCase):
 
     def execute(self, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()):
-            return run(self.config, self.paths, **kwargs)
+            return run(self.config, self.paths, **kwargs, formats="csv,json,md")
+
+    def test_each_recipe_is_resolved_once_per_run(self):
+        from opennpu_quant.models.spec import ModelSpec
+
+        # A second resolution repeats the recipe checks and any replacement warning.
+        with patch.object(ModelSpec, "for_run", wraps=ModelSpec.for_run) as resolve:
+            self.execute()
+        self.assertEqual(1, resolve.call_count)
 
     def test_standalone_report_holds_both_locks_and_releases_them_on_error(self):
         from opennpu_quant._locking import RunLock
@@ -263,7 +271,7 @@ class GenerationReuseTests(unittest.TestCase):
 
     def test_evaluation_change_reuses_model_and_preserves_previous_attempt(self):
         self.execute()
-        old = self.out / "toy/pot_rtn/result.json"
+        old = self.out / ".state/toy/pot_rtn/result.json"
         payload = old.read_bytes()
         model_hash = sha256(old.with_name("model.onnx"))
         self.config["evaluation"]["limit"] = 2
@@ -272,7 +280,9 @@ class GenerationReuseTests(unittest.TestCase):
         self.assertTrue(result["rows"][0]["complete"])
         self.assertEqual("reused", read_json(old)["model_generation"]["state"])
         self.assertEqual(model_hash, sha256(old.with_name("model.onnx")))
-        archives = list((self.out / ".evaluations").glob("*/toy/pot_rtn/result.json"))
+        archives = list(
+            (self.out / ".state/.evaluations").glob("*/toy/pot_rtn/result.json")
+        )
         self.assertEqual(1, len(archives))
         self.assertEqual(payload, archives[0].read_bytes())
         self.assertEqual(1, report(archives[0].parents[2])["rows"][0]["samples"])
@@ -294,7 +304,7 @@ class GenerationReuseTests(unittest.TestCase):
         self.config["conditions"] = copy.deepcopy(all_conditions)
         self.execute()
         original = {
-            name: (self.out / "toy" / name / "result.json").read_bytes()
+            name: (self.out / ".state/toy" / name / "result.json").read_bytes()
             for name in all_conditions
         }
         with (
@@ -308,30 +318,32 @@ class GenerationReuseTests(unittest.TestCase):
                 result = self.execute()
                 self.assertEqual(len(names), len(result["rows"]))
                 self.assertTrue(all(row["complete"] for row in result["rows"]))
-                status = read_json(self.out / "status.json")
+                status = read_json(self.out / ".state/status.json")
                 for name in names:
                     self.assertEqual(
                         "reused", status["models"]["toy"]["conditions"][name]["state"]
                     )
                     self.assertEqual(
                         original[name],
-                        (self.out / "toy" / name / "result.json").read_bytes(),
+                        (self.out / ".state/toy" / name / "result.json").read_bytes(),
                     )
         # Report rebinding is explicit and bound to the active configuration.
         status["models"]["toy"]["conditions"]["rtn_copy"]["reused_config_identity"] = (
             "changed"
         )
-        atomic_json(self.out / "status.json", status)
+        atomic_json(self.out / ".state/status.json", status)
         # This result's original full config matches again. Change report policy to
         # exercise the rebinding check independently of measurement identities.
-        config = read_json(self.out / "effective_config.json")
+        config = read_json(self.out / ".state/settings.json")["config"]
         config["report"]["target_mean_recovery"] = 90
-        atomic_json(self.out / "effective_config.json", config)
+        settings = read_json(self.out / ".state/settings.json")
+        settings["config"] = config
+        atomic_json(self.out / ".state/settings.json", settings)
         self.assertTrue(all(not row["complete"] for row in report(self.out)["rows"]))
 
     def test_changed_scope_evaluates_and_restores_exact_prior_scope(self):
         self.execute()
-        before = (self.out / "toy/pot_rtn/result.json").read_bytes()
+        before = (self.out / ".state/toy/pot_rtn/result.json").read_bytes()
         self.config["evaluation"]["limit"] = 2
         with no_generation():
             self.execute()
@@ -344,15 +356,19 @@ class GenerationReuseTests(unittest.TestCase):
         ):
             result = self.execute()
         self.assertEqual(1, result["rows"][0]["samples"])
-        self.assertEqual("completed", result["rows"][0]["state"])
+        self.assertEqual("reused", result["rows"][0]["state"])
         self.assertFalse(result["rows"][0]["complete"])
-        self.assertEqual(before, (self.out / "toy/pot_rtn/result.json").read_bytes())
+        self.assertEqual(
+            before, (self.out / ".state/toy/pot_rtn/result.json").read_bytes()
+        )
 
     def test_corrupt_archive_is_not_restored(self):
         self.execute()
         self.config["evaluation"]["limit"] = 2
         self.execute()
-        archived = next((self.out / ".evaluations").glob("*/toy/pot_rtn/result.json"))
+        archived = next(
+            (self.out / ".state/.evaluations").glob("*/toy/pot_rtn/result.json")
+        )
         archived.write_text("{}")
         self.config["evaluation"]["limit"] = 1
         with patch(
@@ -368,12 +384,12 @@ class GenerationReuseTests(unittest.TestCase):
         self.config["evaluation"]["limit"] = 2
         with no_generation():
             self.execute()
-        result = read_json(self.out / "toy/pot_rtn/result.json")
+        result = read_json(self.out / ".state/toy/pot_rtn/result.json")
         self.assertEqual("reused", result["model_generation"]["state"])
         self.assertTrue(result["model_generation"]["saved"])
-        self.assertFalse((self.out / "toy/pot_rtn/model.onnx").exists())
+        self.assertFalse((self.out / ".state/toy/pot_rtn/model.onnx").exists())
         self.assertEqual(
-            1, len(list((self.out / ".generated").glob("*/*/complete.json")))
+            1, len(list((self.out / ".state/.generated").glob("*/*/complete.json")))
         )
 
     def test_saved_generation_survives_failed_evaluation(self):
@@ -384,15 +400,15 @@ class GenerationReuseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "evaluation failed"):
                 self.execute()
         self.assertEqual(
-            1, len(list((self.out / ".generated").glob("*/*/complete.json")))
+            1, len(list((self.out / ".state/.generated").glob("*/*/complete.json")))
         )
-        self.assertFalse((self.out / "toy/pot_rtn/complete.json").exists())
+        self.assertFalse((self.out / ".state/toy/pot_rtn/complete.json").exists())
         with no_generation():
             result = self.execute()
         self.assertEqual("completed", result["rows"][0]["state"])
         self.assertEqual(
             "reused",
-            read_json(self.out / "toy/pot_rtn/result.json")["model_generation"][
+            read_json(self.out / ".state/toy/pot_rtn/result.json")["model_generation"][
                 "state"
             ],
         )
@@ -400,11 +416,11 @@ class GenerationReuseTests(unittest.TestCase):
     def test_unsaved_model_is_regenerated_for_a_new_evaluation(self):
         self.config["output"]["save_qdq_models"] = False
         self.execute()
-        old = read_json(self.out / "toy/pot_rtn/result.json")
+        old = read_json(self.out / ".state/toy/pot_rtn/result.json")
         self.assertEqual(
             "model_not_saved_regeneration_required", old["model_generation"]["reuse"]
         )
-        self.assertFalse((self.out / ".generated").exists())
+        self.assertFalse((self.out / ".state/.generated").exists())
         self.config["evaluation"]["limit"] = 2
         with patch(
             "opennpu_quant.runner.quantize",
@@ -420,7 +436,7 @@ class GenerationReuseTests(unittest.TestCase):
         for corrupt in (True, False):
             with self.subTest(corrupt=corrupt):
                 self.execute(force=True)
-                cache = next((self.out / ".generated").glob("*/*"))
+                cache = next((self.out / ".state/.generated").glob("*/*"))
                 if corrupt:
                     with (cache / "model.onnx").open("ab") as stream:
                         stream.write(b"changed")
@@ -452,11 +468,16 @@ class GenerationReuseTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "regenerated"):
                         self.execute(**{flag: True})
 
-    def test_corrupt_completion_refreshes_the_success_report(self):
+    def test_failed_recovery_refreshes_the_success_report(self):
         self.execute()
-        (self.out / "toy/pot_rtn/complete.json").write_text("{")
-        with self.assertRaises(ValueError):
-            self.execute()
+        (self.out / ".state/toy/pot_rtn/complete.json").write_text("{")
+        with patch(
+            "opennpu_quant.runner.evaluate",
+            side_effect=RuntimeError("evaluation failed"),
+        ) as evaluate:
+            with self.assertRaisesRegex(RuntimeError, "evaluation failed"):
+                self.execute()
+        self.assertEqual(1, evaluate.call_count)
         row = read_json(self.out / "summary.json")["rows"][0]
         self.assertEqual("failed", row["state"])
         self.assertFalse(row["complete"])
@@ -485,16 +506,16 @@ class GenerationReuseTests(unittest.TestCase):
         self.config["conditions"] = {"pot_adaround": policy}
         self.config["adaround"]["steps"] = 2
         self.execute()
-        record = read_json(self.out / "toy/pot_adaround/result.json")
+        record = read_json(self.out / ".state/toy/pot_adaround/result.json")
         self.assertIsNotNone(record["adaround"])
         self.config["evaluation"]["limit"] = 2
         with no_generation():
             self.execute()
         self.assertEqual(
             "reused",
-            read_json(self.out / "toy/pot_adaround/result.json")["model_generation"][
-                "state"
-            ],
+            read_json(self.out / ".state/toy/pot_adaround/result.json")[
+                "model_generation"
+            ]["state"],
         )
 
     def test_interrupted_evaluation_archive_resumes_without_losing_results(self):
@@ -502,21 +523,21 @@ class GenerationReuseTests(unittest.TestCase):
         from opennpu_quant.run_storage import finish_archive
 
         self.execute()
-        payload = (self.out / "toy/pot_rtn/result.json").read_bytes()
-        archive = self.out / ".evaluations/interrupted"
+        payload = (self.out / ".state/toy/pot_rtn/result.json").read_bytes()
+        archive = self.out / ".state/.evaluations/interrupted"
         archive.mkdir(parents=True)
-        (self.out / "toy").replace(archive / "toy")
+        (self.out / ".state/toy").replace(archive / "toy")
         atomic_json(
-            self.out / ".evaluation-transition.json",
+            self.out / ".state/.evaluation-transition.json",
             dict(
                 destination=".evaluations/interrupted",
-                names=["toy", "effective_config.json", "status.json"],
+                names=["toy", "settings.json", "status.json"],
             ),
         )
-        finish_archive(self.out)
+        finish_archive(self.out / ".state")
         self.assertEqual(payload, (archive / "toy/pot_rtn/result.json").read_bytes())
         self.assertEqual(1, report(archive)["rows"][0]["samples"])
-        self.assertFalse((self.out / ".evaluation-transition.json").exists())
+        self.assertFalse((self.out / ".state/.evaluation-transition.json").exists())
 
     def test_generation_device_depends_on_calibration_and_adaround(self):
         from opennpu_quant.runner import _ModelRun
@@ -568,7 +589,7 @@ class ReviewRecoveryTests(unittest.TestCase):
                 tempfile.TemporaryDirectory() as temp,
             ):
                 paths, config = fixture(Path(temp))
-                run(config, paths, recalibrate=True)
+                run(config, paths, recalibrate=True, formats="csv,json,md")
                 config["evaluation"]["limit"] = 1
                 injected = []
                 unlink, copyfile = Path.unlink, storage.shutil.copyfile
@@ -580,7 +601,7 @@ class ReviewRecoveryTests(unittest.TestCase):
                     return unlink(path, *args, **kwargs)
 
                 def stop_copy(src, dst, *args, **kwargs):
-                    if Path(src).name == "results.csv":
+                    if Path(src).name == "settings.json":
                         Path(dst).write_bytes(Path(src).read_bytes()[:5])
                         injected.append(True)
                         raise OSError("partial report")
@@ -592,15 +613,17 @@ class ReviewRecoveryTests(unittest.TestCase):
                     else patch.object(storage.shutil, "copyfile", stop_copy)
                 )
                 with target, self.assertRaises((KeyboardInterrupt, OSError)):
-                    run(config, paths)
+                    run(config, paths, formats="csv,json,md")
                 self.assertTrue(injected)
-                result = run(config, paths)
+                result = run(config, paths, formats="csv,json,md")
                 self.assertEqual(1, result["rows"][0]["samples"])
                 self.assertEqual("completed", result["rows"][0]["state"])
                 self.assertFalse(result["rows"][0]["full_evaluation"])
                 self.assertFalse(
                     (
-                        paths.runs / config["name"] / ".evaluation-transition.json"
+                        paths.runs
+                        / config["name"]
+                        / ".state/.evaluation-transition.json"
                     ).exists()
                 )
 
@@ -617,5 +640,9 @@ class ReviewRecoveryTests(unittest.TestCase):
             config["models"] = ["prepared"]
             config["percentiles"]["prepared"] = config["percentiles"].pop("toy")
             config["conditions"] = {"fp32": {}}
-            self.assertTrue(run(config, paths)["rows"][0]["complete"])
-            self.assertTrue(run(config, paths)["rows"][0]["complete"])
+            self.assertTrue(
+                run(config, paths, formats="csv,json,md")["rows"][0]["complete"]
+            )
+            self.assertTrue(
+                run(config, paths, formats="csv,json,md")["rows"][0]["complete"]
+            )

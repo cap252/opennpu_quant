@@ -21,7 +21,7 @@ preprocess:
   stride: 32
   rectangular: true
 decode:
-  profile: historical_cnn33_v1
+  profile: yolox_torch_nms_v1
   kind: yolo
   output: predictions
   confidence_threshold: 0.001

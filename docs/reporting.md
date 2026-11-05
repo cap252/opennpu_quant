@@ -42,7 +42,9 @@ Records without explicit full-evaluation evidence remain in the partial tables a
 
 `--format tsv` writes TSV tables instead of CSV, `json` writes the two JSON reports, and `md` writes `summary.md`. Formats can be combined. Empty tables retain their headers. CSV uses UTF-8 with a BOM, and TSV uses plain UTF-8.
 
-`report` also accepts `--models` and `--conditions`. If a condition is missing from the profile tables, look up its reason in `raw_data.metadata.json`. Standalone report commands preserve files in unselected formats. `run` also refreshes existing report files after each model and on success, failure or interruption. Use a new report directory for a clean output set.
+`report` also accepts `--models` and `--conditions`. If a condition is missing from the profile tables, look up its reason in `raw_data.metadata.json`. Standalone report commands preserve files in unselected formats. `run` also refreshes existing report files after each condition or model and on success, failure or interruption. Use a new report directory for a clean output set.
+
+`--output` takes the run folder itself or a separate folder. A folder inside `.state` or another run's folder is rejected, so a report never overwrites run files. `results --output` follows the same rule.
 
 ## The 15-column table
 
@@ -96,15 +98,15 @@ The summary shows a cohort mean per condition over the selected models in one ru
 
 For LFW, ordinary runs count input views in `samples` and record `pair_count` in metric details. The optional raw table metadata labels the view count and sample unit ([LFW](models-and-data.md#lfw)).
 
-Environment diagnostics compare each result with its FP32 baseline and are recorded in `settings.json` and, when requested, `summary.json` and `raw_data.metadata.json`. A diagnostic does not remove recovery values whose pairing passed. Ordinary run pairing requires matching numerical runtime settings.
+Environment diagnostics compare each result with its FP32 baseline and are recorded in `settings.json` and, when requested, `summary.json` and `raw_data.metadata.json`. A diagnostic does not remove recovery values whose pairing passed. Ordinary run pairing requires matching numerical runtime settings. Report filters do not change the diagnostics: a result is compared with its run's FP32 runtime even when `--conditions` leaves the FP32 row out. Recovery still needs the FP32 row in the selection.
 
-CUDA evaluations also record the NVIDIA kernel driver text from `/proc/driver/nvidia/version` and the SHA256 of the driver libraries mapped by the inference process, such as `libcuda.so.1`. The GPU diagnostic needs both to pass; a record without them remains `pending`. These fields are diagnostics only and do not change result reuse.
+CUDA evaluations also record the NVIDIA kernel driver text from `/proc/driver/nvidia/version` and the SHA256 of the driver libraries mapped by the inference process, such as `libcuda.so.1`. The GPU diagnostic needs both to pass. A record without them remains `pending`. These fields are diagnostics only and do not change result reuse.
 
 ## Exclusions and verification
 
-Failed, unexecuted, unverifiable or metric-less results get no numerical row, and `raw_data.metadata.json` records why. A valid INT8 measurement without a compatible FP32 denominator still appears, with blank recovery. Partial evaluations go to the partial files instead of being excluded. Partial LFW artifacts are rejected. Prepare a new full LFW evaluation.
+Failed, unexecuted, unverifiable or metric-less results get no numerical row in the `raw_data` tables, and `raw_data.metadata.json` records why. `results.csv` keeps their row with blank INT8 and recovery values. A valid INT8 measurement without a compatible FP32 denominator still appears, with blank recovery. Partial evaluations go to the partial files instead of being excluded. Partial LFW artifacts are rejected. Prepare a new full LFW evaluation.
 
-`report` checks saved settings, completion markers and attested file hashes. `results` validates portable record structure and units but cannot reauthenticate the original files. Use `report` when source-file verification is needed.
+`report` checks saved settings, completion markers and attested file hashes. A completed condition whose files fail these checks is reported as `unverified` without metrics. `results` validates portable record structure and units but cannot reauthenticate the original files. Use `report` when source-file verification is needed.
 
 ## Import into Excel
 

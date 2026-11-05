@@ -1,6 +1,6 @@
 # Development checks
 
-The test suite builds small models and datasets in temporary directories, so it needs no downloads or external assets. Real-model results are summarized in [Validation scope and limitations](../docs/validation.md#what-has-been-verified).
+The test suite builds small models and datasets in temporary directories, so it needs no downloads or external assets. See [Validation scope and limitations](../docs/validation.md) for how to interpret real-model results.
 
 ## Run the checks
 
@@ -26,6 +26,7 @@ Use `./.tools/uv` if setup installed uv locally. Tests that need Torch, Torchvis
 | `fixtures/export_settings.json` | Export settings for all 30 recipes. Update only for a reviewed, intentional export change |
 | `fixtures/documented_internals.json` | Signatures of the non-public names that README and docs import |
 | `fixtures/opennpu_raw_format.json` | Columns, display names and schemes of the 15-column table |
+| `fixtures/face_angle_reference.json` | 20 high-precision arccos reference cases for the fixed-angle metric |
 | `library_fixtures.py` | A toy model and feeds shared by tests |
 | `dataset_fixtures.py` | A small embedding graph for the full LFW protocol test |
 
@@ -85,7 +86,7 @@ The Python postprocessing example uses `ModelEvaluator` and `resolve` as extensi
 | `test_recovery.py` | Common recovery operation order, exact FP32 self-comparison, mixed units, missing denominators and serialized precision |
 | `test_lfw.py` | Full LFW pair order, ten folds, flip views, unchanged calibration input selection, early rejection of partial evaluation requests, manifest tampering, the reference crop identity, mismatch warnings and recorded OpenBLAS alignment settings |
 | `test_auxiliary_metrics.py` | Fixed-angle normalization bits, high-precision arccos references, same-environment repeatability, FP64 angle threshold boundary, full-protocol metric names and serialization |
-| `test_evaluation_contracts.py` | Profile resolution for every supported recipe, descriptive profile names in experiments, the generic `current_v1` behavior, and the Python postprocessing hook |
+| `test_evaluation_contracts.py` | Descriptive profiles for supported recipes, unsupported profile rejection and the Python postprocessing hook |
 | `test_evaluation_defaults.py` | Generation defaults and packaged recipe profiles, local bundles, override precedence, classifier tie order and rejection of profiles for unknown model names |
 | `test_evaluation_profiles.py` | YOLO profile behavior (NMS, clipping, mask arithmetic, metric area), real evaluator routing and evaluation changes. Needs Torch and Torchvision |
 
@@ -97,23 +98,28 @@ The fixed-angle math check uses [20 high-precision reference cases](fixtures/fac
 |---|---|
 | `test_portable.py` | End-to-end local run with resume, reuse and tampering, statistics relocation, downloads and archives, checkout cleanup and ImageNet preparation |
 | `test_dataset_download.py` | COCO/VOC downloads from small local archives, CLI preparation, offline reuse, VOC layout, reuse and missing-file repair, checksums, conflicting files, unsafe archives and existing manifest validation |
+| `test_evaluation_recovery.py` | Corrupt evaluation records are preserved and evaluated once, saved models remain reusable, and failed inference does not enter a retry loop. Covers both run modes and CLI outcomes |
+| `test_evaluation_steps.py` | Rules of the evaluation-config steps without inference: condition counts, the selection and condition identities, sample scope, runtime settings, reuse or one-time recovery of saved records, completed records and failure records |
+| `test_condition_outcomes.py` | One rule for every run path: stop requests interrupt, missing files during preparation stay pending, and any other exception fails only its condition in evaluation configs and stops generation. CLI exit codes, logged tracebacks of unexpected errors, the profiled-output comparison, and save failures of state or reports that stop the run while completed conditions stay reusable |
+| `test_run_records.py` | Shared generation and evaluation evidence, incomplete status, archived cache rejection and reporting without execution imports |
 | `test_result_reliability.py` | Result reuse evidence, invalidation by graph or data changes, forced recompute, stale files, original errors, undefined primary metric |
 | `test_unified_run.py` | Saved QDQ reuse, evaluation archives and restoration, metadata-only reports and concurrent report locking |
 | `test_runtime_boundaries.py` | CPU numerical identity, FP32-only input requirements, environment evidence and GPU profile limits |
 | `test_gpu_environment.py` | GPU specification, library and calculation identities, UUID-independent reuse and hashed runtime device records, and the kernel driver and driver library records of CUDA evaluations |
 | `test_code_identity.py` | Identity changes for nested Python edits, renames, additions and deletions, and ignores non-Python files |
 | `test_cache_concurrency.py` | Concurrent input and statistics readers, one input-cache builder, waiting writers, failure recovery, process exit, interruption and integrity checks after waiting |
-| `test_recalibrate.py` | `--recalibrate` generations, partial and interrupted runs, the source files in the statistics cache key |
-| `test_results.py` | `results` tables: units, FP32 pairing, identity mismatches, historical-origin rejection before export, Excel/Unicode, partial denominators |
+| `test_recalibrate.py` | `--recalibrate` generations, partial and aborted runs, the source files in the statistics cache key |
+| `test_report_output.py` | One writer for every report folder: destinations inside `.state` or another run are rejected for `report` and `results`, settings.json follows the reported records, and filters do not change environment diagnostics |
+| `test_results.py` | `results` tables: units, FP32 pairing, identity mismatches, historical-origin rejection before export, Excel/Unicode, partial denominators, obsolete metrics tables preserved and warned about by standalone reports |
 | `test_final_evidence.py` | Evaluation-identity mismatches |
 | `test_raw_exports.py` | 15-column raw tables of run exports, `results --stdout` and `report` rebuilds, including the percentile and scheme columns |
-| `test_run_capture.py` | Selected raw capture, budgets, input preservation, corruption and interrupted publication |
+| `test_run_capture.py` | Selected raw capture, budgets, input preservation, corruption and aborted publication |
 | `test_replay_diagnostics.py` | Documented CSV examples, provenance hashes and recovery values |
 | `test_raw_report.py` | Excel-compatible tables for ordinary `report`: formats, units, full/partial split, denominators, exclusions and metadata-only execution |
 | `test_review_fixes.py` | Report formats and policies, export Top-5 parity, recipe layout checks, audit block size, gate provenance, optional Torch suite, COCO details |
 
 ### Public run storage
 
-| File | Coverage |
+| File | Covers |
 |---|---|
-| `test_public_run.py` | Generation and existing-ONNX evaluation, minimal outputs, reuse, the `settings.json` of separate report folders, missing or corrupted assets, run-format conflicts, native ORT failures and profiled-sample mismatches as condition failures, functional-pass flags of failed conditions, profile validation before any work, exit codes and LFW dry-run limits |
+| `test_public_run.py` | Generation and existing-ONNX evaluation, minimal outputs, reuse including across GPU memory limit changes, one obsolete-table warning per run, the `settings.json` of separate report folders, missing or corrupted assets, run-format conflicts, native ORT failures and profiled-sample mismatches as condition failures, functional-pass flags of failed conditions, profile validation before any work, exit codes and LFW dry-run limits |

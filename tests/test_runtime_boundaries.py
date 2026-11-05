@@ -58,15 +58,15 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 "opennpu_quant.runner.calibrate",
                 side_effect=AssertionError("calibration called"),
             ):
-                run(config, paths)
-                run(config, paths)
-            status = read_json(paths.runs / config["name"] / "status.json")
+                run(config, paths, formats="csv,json,md")
+                run(config, paths, formats="csv,json,md")
+            status = read_json(paths.runs / config["name"] / ".state/status.json")
             self.assertEqual(
                 "reused", status["models"]["toy"]["conditions"]["fp32"]["state"]
             )
             with patch.dict(os.environ, {"NPY_DISABLE_CPU_FEATURES": "AVX2"}):
                 with self.assertRaisesRegex(ValueError, "execution identity changed"):
-                    run(config, paths)
+                    run(config, paths, formats="csv,json,md")
             config["name"] = "mixed"
             config["conditions"]["pot_rtn"] = {
                 "scheme": "asym_pc_pot",
@@ -77,7 +77,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
             config["conditions"]["pot_rtn"] = load_config()["conditions"]["pot_rtn"]
             with self.assertRaisesRegex(ValueError, "Calibration sample count"):
-                run(config, paths)
+                run(config, paths, formats="csv,json,md")
 
     def test_environment_missing_is_pending_and_driver_changes_warn(self):
         base = dict(device="cpu", cpu_numerics=cpu_environment())
@@ -140,10 +140,10 @@ class EvaluationCoverageTests(unittest.TestCase):
                 config["evaluation"]["limit"] = None if change == "expected" else 2
                 manifest = paths.data / "imagenet/manifest.json"
                 calibration = Dataset(manifest).identity("calibration", 2)
-                first = run(config, paths)
+                first = run(config, paths, formats="csv,json,md")
                 self.assertTrue(first["rows"][0]["full_evaluation"])
                 output = paths.runs / config["name"]
-                result = output / "toy/fp32/result.json"
+                result = output / ".state/toy/fp32/result.json"
                 original = result.read_bytes()
                 data = read_json(manifest)
                 if change != "length":
@@ -155,9 +155,12 @@ class EvaluationCoverageTests(unittest.TestCase):
                     calibration, Dataset(manifest).identity("calibration", 2)
                 )
                 with self.assertRaisesRegex(
-                    ValueError, "execution identity changed.*--force"
+                    ValueError,
+                    "Prepared validation list exceeds"
+                    if change == "length"
+                    else "execution identity changed.*--force",
                 ):
-                    run(config, paths)
+                    run(config, paths, formats="csv,json,md")
                 self.assertEqual(original, result.read_bytes())
                 self.assertFalse(
                     read_json(output / "summary.json")["rows"][0]["complete"]
@@ -166,9 +169,9 @@ class EvaluationCoverageTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, "Missing evaluation samples"
                     ):
-                        run(config, paths, force=True)
+                        run(config, paths, force=True, formats="csv,json,md")
                 elif change == "both":
-                    forced = run(config, paths, force=True)
+                    forced = run(config, paths, force=True, formats="csv,json,md")
                     row = forced["rows"][0]
                     self.assertEqual(
                         (2, 3, False, False),
@@ -207,15 +210,15 @@ class RuntimePlacementReuseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             paths, config = fixture(Path(temp))
             config["conditions"] = {"fp32": {}}
-            run(config, paths)
+            run(config, paths, formats="csv,json,md")
             config["runtime"]["cuda"]["gpu_mem_limit"] = 1024
             with patch(
                 "opennpu_quant.runner._ModelRun._evaluate",
                 side_effect=AssertionError("unexpected reevaluation"),
             ):
-                summary = run(config, paths)
+                summary = run(config, paths, formats="csv,json,md")
             self.assertTrue(summary["rows"][0]["complete"])
-            status = read_json(paths.runs / config["name"] / "status.json")
+            status = read_json(paths.runs / config["name"] / ".state/status.json")
             self.assertEqual(
                 "reused", status["models"]["toy"]["conditions"]["fp32"]["state"]
             )

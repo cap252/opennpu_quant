@@ -23,7 +23,7 @@ The shapes come from the verified FP32 ONNX files. [`model-inputs.json`](model-i
 
 ## Classification
 
-Dataset ImageNet, metrics top1 and top5. The profiles below apply to public generation and release evaluation. Archived selections retain their recorded profiles.
+Dataset ImageNet, metrics top1 and top5. The profiles below apply to public generation and release evaluation.
 
 | Model ID | Group | Recipe input shape / dtype / layout | Actual network shape / dtype / layout | Spatial dimensions / feed | Preprocessing | CPU host / decoder / profile |
 |---|---|---|---|---|---|---|
@@ -125,41 +125,41 @@ Values described as fixed cannot be overridden from YAML or the CLI. The NMS det
 
 ## Per-model settings
 
-The table lists the selected percentiles and the recorded runtime and training settings. The core10 and cnn30 generation presets contain explicit per-condition percentiles. Release evaluation configs select already generated ONNX candidates. The `core10` and `cnn30` presets use the listed percentiles, calibration counts and AdaRound hyperparameters, but use a 6 GiB ORT GPU limit, a 512 MiB AdaRound window and training device `auto` for every model.
+The table lists the selected percentiles and the recorded training settings. The core10 and cnn30 generation presets contain explicit per-condition percentiles. Release evaluation configs select already generated ONNX candidates. The `core10` and `cnn30` presets use the listed percentiles, calibration counts and AdaRound hyperparameters, but use a 6 GiB ORT GPU limit, a 512 MiB AdaRound window and training device `auto` for every model.
 
 The P column lists **Asym/PC float / Asym/PC PoT / Sym/PT PoT**, in that order. A single line applies to both RTN and AdaRound. Separate lines show where they differ. Calibration counts are inputs, so LFW uses 128 images rather than pairs. The window is `adaround.window_bytes`, separate from the ORT GPU limit and activation cache.
 
 All selected AdaRound conditions use 10,000 steps, learning rate 0.001, warm-up 0.2, regularization 0.01, beta 20→2, seed 20260928, batch 8, 32 window samples, 100 window steps, device `cuda`, atol 1e-5 and rtol 1e-4.
 
-| Model ID | Group | Calibration inputs | P(float / asym PoT / sym PoT) | ORT GPU limit GiB | AdaRound window MiB |
-|---|---|---:|---|---|---:|
-| `resnet18` | core10 | 1000 | RTN: 99.999 / 99.999 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `resnet50` | core10 | 1000 | 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `resnet101` | cnn30 additional | 1000 | 99.99 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `mobilenet_v1` | cnn30 additional | 1000 | 99.9 / 99.9 / 99.999 | 6 (all conditions) | 512 |
-| `mobilenet_v2` | core10 | 1000 | 99.99 / 99.9 / 99.9 | 6 (all conditions) | 512 |
-| `mobilenet_v3_large` | core10 | 1000 | 99.99 / 99.9 / 99.9 | 6 (all conditions) | 512 |
-| `efficientnet_b0` | core10 | 1000 | RTN: 99.99 / 99.9 / 99.9<br>AdaRound: 99.9 / 99.9 / 99.9 | 6 (all conditions) | 512 |
-| `efficientnet_lite4` | cnn30 additional | 1000 | 99.99 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `squeezenet1_1` | cnn30 additional | 1000 | 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `shufflenet_v2_x1_0` | cnn30 additional | 1000 | 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `vgg16` | cnn30 additional | 1000 | 99.999 / 99.999 / 99.999 | 8 for float and Sym/PT PoT AdaRound, 6 for the others | 512 |
-| `inception_v3` | core10 | 1000 | RTN: 99.99 / 99.99 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `yolov3_tiny` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `yolov4_tiny` | cnn30 additional | 128 | 99.99 / 99.9 / 99.99 | 6 (all conditions) | 512 |
-| `yolov5n` | cnn30 additional | 128 | 99.99 / 99.99 / 99.9 | 6 (all conditions) | 512 |
-| `yolov5s` | core10 | 128 | RTN: 99.99 / 99.99 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `yolov7_tiny` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `yolov8n` | cnn30 additional | 128 | 99.999 / 99.99 / 99.9 | 6 (all conditions) | 512 |
-| `ssd_mobilenet_v2_320` | core10 | 128 | 99.999 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `nanodet_plus_m_320` | cnn30 additional | 128 | 99.99 / 99.99 / 99.9 | 6 (all conditions) | 512 |
-| `retinanet_resnet50_fpn` | cnn30 additional | 128 | 99.999 / 99.999 / 99.99 | 6 (all conditions) | 512 |
-| `yolox` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 (all conditions) | 4096 |
-| `retinaface_mnet025_640` | core10 | 128 | 99.9 / 99.9 / 99.9 | 6 (all conditions) | 512 |
-| `yolov7_face` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 (all conditions) | 4096 |
-| `deeplabv3_mnv2_voc` | core10 | 128 | RTN: 99.9 / 99.9 / 99.99<br>AdaRound: 99.9 / 99.99 / 99.99 | 6 (all conditions) | 512 |
-| `unet_resnet50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 (all conditions) | 4096 |
-| `deeplabv3_r50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 for AdaRound, 6 for FP32 and RTN | 4096 |
-| `fcn_r50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 (all conditions) | 4096 |
-| `yolov5s_seg` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 8 (all conditions) | 4096 |
-| `mobilefacenet_relu_foamliu` | cnn30 additional | 128 | 99.99 / 99.9 / 99.9 | 6 (all conditions) | 512 |
+| Model ID | Group | Calibration inputs | P(float / asym PoT / sym PoT) | AdaRound window MiB |
+|---|---|---:|---|---:|
+| `resnet18` | core10 | 1000 | RTN: 99.999 / 99.999 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 512 |
+| `resnet50` | core10 | 1000 | 99.999 / 99.99 / 99.99 | 512 |
+| `resnet101` | cnn30 additional | 1000 | 99.99 / 99.99 / 99.99 | 512 |
+| `mobilenet_v1` | cnn30 additional | 1000 | 99.9 / 99.9 / 99.999 | 512 |
+| `mobilenet_v2` | core10 | 1000 | 99.99 / 99.9 / 99.9 | 512 |
+| `mobilenet_v3_large` | core10 | 1000 | 99.99 / 99.9 / 99.9 | 512 |
+| `efficientnet_b0` | core10 | 1000 | RTN: 99.99 / 99.9 / 99.9<br>AdaRound: 99.9 / 99.9 / 99.9 | 512 |
+| `efficientnet_lite4` | cnn30 additional | 1000 | 99.99 / 99.99 / 99.99 | 512 |
+| `squeezenet1_1` | cnn30 additional | 1000 | 99.999 / 99.99 / 99.99 | 512 |
+| `shufflenet_v2_x1_0` | cnn30 additional | 1000 | 99.999 / 99.99 / 99.99 | 512 |
+| `vgg16` | cnn30 additional | 1000 | 99.999 / 99.999 / 99.999 | 512 |
+| `inception_v3` | core10 | 1000 | RTN: 99.99 / 99.99 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 512 |
+| `yolov3_tiny` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 512 |
+| `yolov4_tiny` | cnn30 additional | 128 | 99.99 / 99.9 / 99.99 | 512 |
+| `yolov5n` | cnn30 additional | 128 | 99.99 / 99.99 / 99.9 | 512 |
+| `yolov5s` | core10 | 128 | RTN: 99.99 / 99.99 / 99.99<br>AdaRound: 99.999 / 99.99 / 99.99 | 512 |
+| `yolov7_tiny` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 512 |
+| `yolov8n` | cnn30 additional | 128 | 99.999 / 99.99 / 99.9 | 512 |
+| `ssd_mobilenet_v2_320` | core10 | 128 | 99.999 / 99.99 / 99.99 | 512 |
+| `nanodet_plus_m_320` | cnn30 additional | 128 | 99.99 / 99.99 / 99.9 | 512 |
+| `retinanet_resnet50_fpn` | cnn30 additional | 128 | 99.999 / 99.999 / 99.99 | 512 |
+| `yolox` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `retinaface_mnet025_640` | core10 | 128 | 99.9 / 99.9 / 99.9 | 512 |
+| `yolov7_face` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `deeplabv3_mnv2_voc` | core10 | 128 | RTN: 99.9 / 99.9 / 99.99<br>AdaRound: 99.9 / 99.99 / 99.99 | 512 |
+| `unet_resnet50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `deeplabv3_r50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `fcn_r50_voc` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `yolov5s_seg` | cnn30 additional | 128 | 99.99 / 99.99 / 99.99 | 4096 |
+| `mobilefacenet_relu_foamliu` | cnn30 additional | 128 | 99.99 / 99.9 / 99.9 | 512 |

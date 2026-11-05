@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from .cpu_environment import cpu_environment
-from .gpu_environment import recorded_device, recorded_visibility
+from .gpu_environment import recorded_visibility
 from .cuda_libs import loaded_libraries, loaded_driver_libraries, compare_libraries
 
 EXPECTED = {
@@ -237,54 +237,3 @@ def warn_diagnostics(rows):
             "Recorded environment diagnostics do not determine numerical acceptance. %s",
             message,
         )
-
-
-def probe_gpu(device=0):
-    """A real Conv must execute on CUDA; installed providers alone are insufficient."""
-    import tempfile
-    from pathlib import Path
-    import numpy as np
-    import onnx
-    from .config import OrtConfig
-    from .session import create_session
-    from .profile import summarize_profile, assert_cuda_observed
-    from .._io import read_json
-
-    h, t = onnx.helper, onnx.TensorProto
-    graph = h.make_graph(
-        [h.make_node("Conv", ["x", "w"], ["y"])],
-        "probe",
-        [h.make_tensor_value_info("x", t.FLOAT, [1, 1, 2, 2])],
-        [h.make_tensor_value_info("y", t.FLOAT, [1, 1, 2, 2])],
-        [h.make_tensor("w", t.FLOAT, [1, 1, 1, 1], [1])],
-    )
-    model = h.make_model(graph, opset_imports=[h.make_opsetid("", 18)], ir_version=10)
-    try:
-        with tempfile.TemporaryDirectory() as temp:
-            session = create_session(
-                model,
-                OrtConfig.cuda(device, strict_versions=True),
-                profile=Path(temp) / "probe",
-            )
-            session.run(None, {"x": np.ones((1, 1, 2, 2), np.float32)})
-            placement = summarize_profile(read_json(session.end_profiling()))
-            assert_cuda_observed(session.get_providers(), placement)
-        device_identity = None
-        try:
-            import torch
-
-            properties = torch.cuda.get_device_properties(device)
-            device_identity = dict(
-                name=properties.name,
-                uuid=str(getattr(properties, "uuid", "")),
-                capability=[properties.major, properties.minor],
-            )
-        except (ImportError, RuntimeError, AssertionError):
-            pass
-        return dict(
-            available=True,
-            placement=placement,
-            device_identity=recorded_device(device_identity),
-        )
-    except Exception as error:
-        return dict(available=False, diagnostic=str(error))

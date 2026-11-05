@@ -214,3 +214,13 @@ class Dataset:
             expected_samples=count,
             max_bytes=max_bytes,
         )
+
+
+def validation_scope(dataset):
+    expected = dataset.info["expected_samples"]
+    listed = len(dataset.rows("validation"))
+    if type(expected) is not int or expected <= 0 or listed > expected:
+        raise ValueError(
+            "Prepared validation list exceeds or has an invalid expected sample count"
+        )
+    return expected

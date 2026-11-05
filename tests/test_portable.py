@@ -228,7 +228,7 @@ class PortableTests(unittest.TestCase):
             onnx.save_model(model, directory / "network.onnx")
             recipe = copy.deepcopy(ModelSpec.load("resnet18").recipe)
             recipe["name"] = "toy"
-            recipe["decode"]["profile"] = "current_v1"
+            recipe["decode"]["profile"] = "stable_topk_v1"
             recipe["preprocess"].update(resize=4, crop=4)
             recipe["input"]["shape"] = [1, 3, 4, 4]
             (directory / "recipe.yaml").write_text(yaml.safe_dump(recipe))
@@ -274,10 +274,10 @@ class PortableTests(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=details,
             ):
-                result = run(config, paths)
+                result = run(config, paths, formats="csv,json,md")
             for condition in config["conditions"]:
                 recorded = read_json(
-                    paths.runs / "toy_run/toy" / condition / "result.json"
+                    paths.runs / "toy_run/.state/toy" / condition / "result.json"
                 )
                 self.assertEqual(details, recorded["metric_details"])
             self.assertEqual(7, len(result["rows"]))
@@ -285,10 +285,10 @@ class PortableTests(unittest.TestCase):
             with patch(
                 "opennpu_quant.runner.quantize", side_effect=AssertionError("reuse")
             ):
-                run(config, paths)
-            target = paths.runs / "toy_run/toy/pot_rtn/result.json"
+                run(config, paths, formats="csv,json,md")
+            target = paths.runs / "toy_run/.state/toy/pot_rtn/result.json"
             target.write_text("{}")
-            regenerated = run(config, paths)
+            regenerated = run(config, paths, formats="csv,json,md")
             self.assertEqual(7, len(regenerated["rows"]))
             self.assertEqual("top1", read_json(target)["metric"])
             # A failed stage records failure, not a permanently running model.
@@ -299,23 +299,23 @@ class PortableTests(unittest.TestCase):
                 side_effect=RuntimeError("test failure"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "test failure"):
-                    run(failed, paths)
-            state = read_json(paths.runs / "forced_failure/status.json")
+                    run(failed, paths, formats="csv,json,md")
+            state = read_json(paths.runs / "forced_failure/.state/status.json")
             self.assertEqual("failed", state["models"]["toy"]["state"])
-            saved = read_json(paths.runs / "toy_run/effective_config.json")
+            saved = read_json(paths.runs / "toy_run/.state/settings.json")["config"]
             config["evaluation"]["limit"] = 1
-            updated = run(config, paths)
+            updated = run(config, paths, formats="csv,json,md")
             self.assertTrue(all(row["samples"] == 1 for row in updated["rows"]))
             archives = list(
-                (paths.runs / "toy_run/.evaluations").glob("*/effective_config.json")
+                (paths.runs / "toy_run/.state/.evaluations").glob("*/settings.json")
             )
             self.assertEqual(1, len(archives))
-            self.assertEqual(saved, read_json(archives[0]))
+            self.assertEqual(saved, read_json(archives[0])["config"])
             self.assertEqual(
                 1,
-                read_json(paths.runs / "toy_run/effective_config.json")["evaluation"][
-                    "limit"
-                ],
+                read_json(paths.runs / "toy_run/.state/settings.json")["config"][
+                    "evaluation"
+                ]["limit"],
             )
 
 
