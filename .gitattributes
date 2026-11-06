@@ -2,3 +2,6 @@
 
 # Example CSV hashes describe exact bytes, including their BOM and newlines.
 docs/examples/raw-data/*.csv -text
+
+# Preserve upstream license texts byte for byte.
+licenses/models/* -text

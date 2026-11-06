@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 from opennpu_quant._io import atomic_json, object_hash, sha256
+from opennpu_quant.models.spec import ModelSpec, model_names
 from opennpu_quant.results import (
     export_records,
     normalize_scheme,
@@ -149,6 +150,105 @@ class RawExportTests(unittest.TestCase):
             )
             for record in self.records
         ]
+
+    def test_source_revision_forms_preserve_values_and_inputs(self):
+        cases = [
+            ({"commit": "commit-1", "code_revision": "other"}, "commit-1"),
+            (
+                {
+                    "code_revision": "revision-2",
+                    "package": {"name": "torchvision", "version": "0.20.1"},
+                    "framework": "older-description",
+                },
+                "torchvision 0.20.1 (revision-2)",
+            ),
+            ({"code_revision": "revision-3"}, "revision-3"),
+            ({"code_revision": "revision-3", "package": "unstructured"}, "revision-3"),
+            ({"framework": "framework-4", "provenance_repo": "other"}, "framework-4"),
+            (
+                {"provenance_repo": "tensorflow/models revision-5"},
+                "tensorflow/models revision-5",
+            ),
+            (
+                {
+                    "url": "https://example.test/weights",
+                    "package": {"name": "torchvision"},
+                },
+                None,
+            ),
+        ]
+        baseline = self.run_rows()
+        for source, expected in cases:
+            with self.subTest(source=source):
+                records = self.run_records()
+                for record in records:
+                    record["model_source"] = source
+                before = copy.deepcopy(records)
+                rows = [raw_export_row(row) for row in tables(records)[0]]
+                self.assertEqual(before, records)
+                for old, row in zip(baseline, rows, strict=True):
+                    self.assertEqual(HEADERS, list(row))
+                    self.assertEqual(expected, row["model_source_revision"])
+                    for field in HEADERS:
+                        if field not in {"model_source_url", "model_source_revision"}:
+                            self.assertEqual(old[field], row[field])
+
+    def test_packaged_source_revisions_are_reported_when_recorded(self):
+        missing = []
+        names = model_names()
+        self.assertEqual(30, len(names))
+        for name in names:
+            source = ModelSpec.load(name).recipe["source"]
+            records = self.run_records()
+            for record in records:
+                record["model_source"] = source
+            value = raw_export_row(tables(records)[0][0])["model_source_revision"]
+            if value is None:
+                missing.append(name)
+            elif source.get("commit") or source.get("code_revision"):
+                self.assertIn(source.get("commit") or source["code_revision"], value)
+            else:
+                self.assertEqual(
+                    source.get("framework") or source.get("provenance_repo"), value
+                )
+        self.assertEqual(["deeplabv3_mnv2_voc"], missing)
+
+    def test_saved_records_report_source_revision_without_inference(self):
+        records = self.run_records()
+        for record in records:
+            record["model_source"] = {
+                "code_revision": "recorded-revision",
+                "package": {"name": "timm", "version": "1.0.15"},
+            }
+        path = self.root / "records.json"
+        atomic_json(path, {"schema_version": 1, "records": records})
+        before = path.read_bytes()
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "opennpu_quant",
+                "results",
+                str(path),
+                "--stdout",
+                "csv",
+            ],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        rows = list(csv.DictReader(result.stdout.splitlines()))
+        self.assertEqual(2, len(rows))
+        self.assertEqual(HEADERS, list(rows[0]))
+        self.assertTrue(
+            all(
+                row["model_source_revision"] == "timm 1.0.15 (recorded-revision)"
+                for row in rows
+            )
+        )
+        self.assertEqual(97.5, float(rows[1]["recovery_percent"]))
+        self.assertEqual(before, path.read_bytes())
 
     def test_run_exports_and_cli_stdout_use_the_same_raw_schema(self):
         records = self.run_records()

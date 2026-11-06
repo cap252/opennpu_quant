@@ -31,6 +31,22 @@ def compact(value):
     )
 
 
+def _source_revision(source):
+    """Display recorded source evidence without inferring a missing revision."""
+    if source.get("commit"):
+        return source["commit"]
+    if source.get("code_revision"):
+        package = source.get("package")
+        if not isinstance(package, dict):
+            package = {}
+        label = " ".join(
+            str(package[key]) for key in ("name", "version") if package.get(key)
+        )
+        revision = source["code_revision"]
+        return f"{label} ({revision})" if label else revision
+    return source.get("framework") or source.get("provenance_repo")
+
+
 def metric_values(values, units=None):
     """Known current evaluators return fractions; importers must supply their units."""
     units = units or {}
@@ -399,7 +415,7 @@ def tables(records, *, baselines=None):
             weight_granularity=q.get("weight_granularity"),
             rounding=("AdaRound" if q.get("adaround") else "RTN") if q else None,
             model_source_url=source.get("repo") or source.get("url"),
-            model_source_revision=source.get("commit") or source.get("framework"),
+            model_source_revision=_source_revision(source),
             checkpoint_url=source.get("url"),
             checkpoint_sha256=source.get("sha256"),
             metrics_json=compact(measured),

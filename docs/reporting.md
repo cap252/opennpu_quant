@@ -61,8 +61,8 @@ The column names and order follow the `raw data` sheet of the OpenNPU results wo
 | 7 | `recovery_percent` | 100 × INT8 / FP32, blank when unavailable |
 | 8 | `scheme` | `FP32` or the policy string, without the percentile value |
 | 9 | `percentile` | Percentile value when the Percentile method is used |
-| 10 | `model_source_url` | Source URL from the recipe |
-| 11 | `model_source_revision` | Source commit or framework version |
+| 10 | `model_source_url` | Code repository URL, or checkpoint URL when no repository is recorded |
+| 11 | `model_source_revision` | Recorded source revision or framework version, blank when unavailable |
 | 12 | `top5_percent` | top5 × 100, blank if absent |
 | 13 | `AP50_percent` | AP50 × 100, blank if absent |
 | 14 | `AP75_percent` | AP75 × 100, blank if absent |

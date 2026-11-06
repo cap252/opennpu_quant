@@ -37,15 +37,15 @@ The demo calibrates, quantizes and evaluates a small built-in model without down
 
 ### 2. Check supplied ONNX models
 
-Download the core10 archive from [opennpu_quant v1.0.1](https://github.com/cap252/opennpu_quant/releases/tag/v1.0.1) and extract it from the repository root:
+Use the core10 archive for [opennpu_quant v1.0.2](https://github.com/cap252/opennpu_quant/releases/tag/v1.0.2). If you received the archives directly, skip the download command and verify them before extraction. Run these commands from the repository root:
 
 ```bash
-curl -fL -O https://github.com/cap252/opennpu_quant/releases/download/v1.0.1/cnn30-core10-01-of-01.tar.gz &&
-  sha256sum --check --ignore-missing release-v1.0.1.sha256 &&
+curl -fL -O https://github.com/cap252/opennpu_quant/releases/download/v1.0.2/cnn30-core10-01-of-01.tar.gz &&
+  sha256sum --check --ignore-missing release-v1.0.2.sha256 &&
   tar -xzf cnn30-core10-01-of-01.tar.gz
 ```
 
-The repository’s [checksum list](release-v1.0.1.sha256) verifies the downloaded archives before extraction. Stop if verification fails. This creates `bundle/`, which Git ignores, with the core10 models and evaluation configs. To keep the bundle elsewhere, run these commands in that directory with the path to the checksum list, and pass that location's `bundle/configs/` files to `-c`. The additional20 archives are not needed for core10.
+The repository’s [checksum list](release-v1.0.2.sha256) verifies the downloaded archives before extraction. Stop if verification fails. This creates `bundle/`, which Git ignores, with the core10 models and evaluation configs. To keep the bundle elsewhere, run these commands in that directory with the path to the checksum list, and pass that location's `bundle/configs/` files to `-c`. The additional20 archives are not needed for core10.
 
 Prepare ImageNet and COCO using the [dataset layouts](docs/models-and-data.md#prepare-datasets). Replace the source paths below with your own. Preparation checks calibration inputs and the full validation sets, even for a short evaluation. The evaluation itself performs no calibration or training.
 
@@ -76,9 +76,9 @@ Download all three additional20 archives from the same release and extract them 
   for part in 01 02 03
   do
     archive="cnn30-additional20-${part}-of-03.tar.gz"
-    curl -fL -O "https://github.com/cap252/opennpu_quant/releases/download/v1.0.1/$archive" || exit 1
+    curl -fL -O "https://github.com/cap252/opennpu_quant/releases/download/v1.0.2/$archive" || exit 1
   done
-  sha256sum --check --ignore-missing release-v1.0.1.sha256 || exit 1
+  sha256sum --check --ignore-missing release-v1.0.2.sha256 || exit 1
   for part in 01 02 03
   do
     tar -xzf "cnn30-additional20-${part}-of-03.tar.gz" || exit 1
