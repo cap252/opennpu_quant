@@ -68,7 +68,14 @@ def main():
                 )
                 if recipe["task"] == "face_verification":
                     w, h = 112, 112
-                if recipe["export"].get("dynamic_spatial"):
+                if recipe["export"].get("dynamic_spatial") or recipe["preprocess"][
+                    "kind"
+                ] in (
+                    "yolox",
+                    "mmseg_letterbox",
+                    "yolov5_letterbox",
+                    "yolov7_letterbox",
+                ):
                     # Near-square images can all become the same shape after
                     # stride-aligned letterboxing; exercise square and both axes.
                     w, h = [(size, size), (size, size // 2), (size // 2, size)][index]
@@ -76,7 +83,11 @@ def main():
             value, _ = preprocess(
                 image, recipe["preprocess"], recipe["input"]["layout"]
             )
-            if recipe["name"] == "yolox" and index:
+            if (
+                recipe["name"] == "yolox"
+                and index
+                and recipe["export"].get("dynamic_spatial")
+            ):
                 import numpy as np
 
                 # Runtime padding stays square. Also exercise the released graph's

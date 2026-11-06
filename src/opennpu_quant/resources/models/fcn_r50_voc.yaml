@@ -8,13 +8,13 @@ input:
   shape:
   - 1
   - 3
-  - height
-  - width
+  - 512
+  - 512
   layout: NCHW
 graphs:
   network: network.onnx
 preprocess:
-  kind: mmseg_resize
+  kind: mmseg_letterbox
   size: 512
 decode:
   kind: segmentation_resize
@@ -31,7 +31,7 @@ export:
   family: mmseg
   opset: 17
   simplify: false
-  dynamic_spatial: true
+  dynamic_spatial: false
   fixture_size: 512
   outputs:
   - logits

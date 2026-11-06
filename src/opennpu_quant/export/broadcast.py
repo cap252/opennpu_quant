@@ -46,7 +46,10 @@ def replace_parameter_tiles(source, *, expected=None):
                 and t.shape.dim[0].HasField("dim_value")
             ):
                 return [t.shape.dim[0].dim_value]
-            return [("dim", n.input[0], i) for i in range(len(t.shape.dim))]
+            return [
+                dim.dim_value if dim.HasField("dim_value") else ("dim", n.input[0], i)
+                for i, dim in enumerate(t.shape.dim)
+            ]
         if n.op_type == "Gather" and at.get("axis", 0) == 0:
             value = vector(n.input[0])
             indices = vector(n.input[1])
@@ -105,8 +108,12 @@ def replace_parameter_tiles(source, *, expected=None):
         if vector(expand.input[1]) != [1] * 4 or vector(node.input[1]) != [
             1,
             1,
-            ("dim", feature, 2),
-            ("dim", feature, 3),
+            t.shape.dim[2].dim_value
+            if t.shape.dim[2].HasField("dim_value")
+            else ("dim", feature, 2),
+            t.shape.dim[3].dim_value
+            if t.shape.dim[3].HasField("dim_value")
+            else ("dim", feature, 3),
         ]:
             raise ValueError(
                 "Tile repeats are not the consumer feature spatial dimensions"
@@ -135,5 +142,5 @@ def replace_parameter_tiles(source, *, expected=None):
         kind="parameter_repeat_to_broadcast",
         changes=changes,
         counts=counts,
-        contract="float32 [1,C,1,1], Expand identity, repeats [1,1,H,W] from the same feature; operands and initializer values preserved",
+        contract="float32 [1,C,1,1], Expand identity, repeats [1,1,H,W] matching proven feature dimensions; operands and initializer values preserved",
     )

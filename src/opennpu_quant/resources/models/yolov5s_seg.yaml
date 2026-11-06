@@ -8,18 +8,15 @@ input:
   shape:
   - 1
   - 3
-  - height
-  - width
+  - 640
+  - 640
   layout: NCHW
 graphs:
   network: network.onnx
   postprocess: postprocess.onnx
 preprocess:
-  kind: letterbox_dynamic
+  kind: yolov5_letterbox
   size: 640
-  pad_value: 114
-  stride: 32
-  rectangular: true
 decode:
   profile: yolov5_seg_scaled_coeff_bbox_area_v1
   kind: yolo_seg
@@ -42,7 +39,7 @@ export:
   family: yolov5_seg
   opset: 17
   simplify: false
-  dynamic_spatial: true
+  dynamic_spatial: false
   fixture_size: 640
   outputs:
   - predictions

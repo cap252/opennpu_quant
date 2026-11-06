@@ -69,6 +69,8 @@ The Python postprocessing example uses `ModelEvaluator` and `resolve` as extensi
 
 | File | Covers |
 |---|---|
+| `test_fixed_spatial.py` | Fixed recipes, resize/padding and box/mask restoration, export fixtures and static/dynamic parameter broadcasting |
+| `test_fixed_spatial_bundle.py` | Input-only ONNX conversion, candidate preservation, graph hashes and atomic bundle publication |
 | `test_cnn30.py` | The exact cnn30 model order and task counts, core10 and cnn30 settings with explicit condition percentiles, strict/functional validation, export rewrites (face grids, fixed upsample, DFL split, constant Floor), dynamic input caches and AdaRound windows, decoders, float/PoT scale audits, DepthToSpace |
 | `test_cnn30_support.py` | CNN30 support and retired-model rejection without blocking custom models |
 | `test_tensorflow_export.py` | Mocked SSD/DeepLab converter calls forward the recipe opset (no real TensorFlow conversion) |

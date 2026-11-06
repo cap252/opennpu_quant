@@ -209,6 +209,16 @@ def segmentation(logits, meta, kind):
         mode="bilinear",
         align_corners=False,
     )
+    if kind == "mmseg_letterbox":
+        width, height = meta["valid_size"]
+        if (
+            any(type(v) is not int or v < 1 for v in (width, height))
+            or width > value.shape[-1]
+            or height > value.shape[-2]
+            or meta["pad"] != [0, 0]
+        ):
+            raise ValueError("Invalid fixed MMSeg valid region")
+        value = value[:, :, :height, :width]
     value = F.interpolate(
         value, size=meta["original_size"][::-1], mode="bilinear", align_corners=False
     )

@@ -184,7 +184,7 @@ Include the host graphs a model needs, using the file names in its recipe. If `m
 
 A recipe defines the inputs, preprocessing, graph boundaries, decoder, metric and source checkpoint. See the packaged [ResNet-18 recipe](../src/opennpu_quant/resources/models/resnet18.yaml) for an example. A local recipe overrides the bundle settings of a packaged model, as described in [Precedence and local recipes](evaluation-profiles.md#precedence-and-local-recipes).
 
-Graphs with symbolic spatial dimensions are checked at three resolutions during export. Models with variable input sizes keep each sample's shape in their input caches.
+The five models whose input dimensions are fixed in this edition are checked with square, landscape and portrait source images during export. Each image produces the declared fixed tensor shape. Custom dynamic recipes retain resolution checks and per-sample cache shapes.
 
 ## Add a custom model
 

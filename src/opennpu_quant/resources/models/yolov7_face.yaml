@@ -8,18 +8,15 @@ input:
   shape:
   - 1
   - 3
-  - height
-  - width
+  - 640
+  - 640
   layout: NCHW
 graphs:
   network: network.onnx
   postprocess: postprocess.onnx
 preprocess:
-  kind: letterbox_dynamic
+  kind: yolov7_letterbox
   size: 640
-  pad_value: 114
-  stride: 32
-  rectangular: false
 decode:
   profile: yolov7_face_clip_first4_v1
   kind: yolo_face
@@ -42,7 +39,7 @@ export:
   family: yolov7_face
   opset: 17
   simplify: false
-  dynamic_spatial: true
+  dynamic_spatial: false
   fixture_size: 640
   outputs:
   - predictions

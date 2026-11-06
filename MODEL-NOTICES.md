@@ -27,10 +27,10 @@ every historical asset.
 | Model and recipe | Source license | Weight-license evidence | Export treatment |
 |---|---|---|---|
 | [DeepLabV3-MobileNetV2](src/opennpu_quant/resources/models/deeplabv3_mnv2_voc.yaml) | [TensorFlow DeepLab][tensorflow/deeplab] · Apache-2.0 at the model publication revision | Checkpoint-specific terms not established | TensorFlow graph extraction, logits restoration in a host graph |
-| [DeepLabV3-ResNet50](src/opennpu_quant/resources/models/deeplabv3_r50_voc.yaml) | [MMSegmentation][open-mmlab/mmsegmentation] · Apache-2.0 | Checkpoint-specific terms not established | MMSeg backbone and decode head, variable spatial input |
+| [DeepLabV3-ResNet50](src/opennpu_quant/resources/models/deeplabv3_r50_voc.yaml) | [MMSegmentation][open-mmlab/mmsegmentation] · Apache-2.0 | Checkpoint-specific terms not established | MMSeg backbone and decode head, fixed 512×512 input |
 | [EfficientNet-B0](src/opennpu_quant/resources/models/efficientnet_b0.yaml) | [torchvision][pytorch/vision] · BSD-3-Clause | Checkpoint-specific terms not established | FP32 network export |
 | [EfficientNet-Lite4](src/opennpu_quant/resources/models/efficientnet_lite4.yaml) | [timm][huggingface/pytorch-image-models] · Apache-2.0 | Apache-2.0 in the pinned model card | timm export with fixed-size SAME padding |
-| [FCN-ResNet50](src/opennpu_quant/resources/models/fcn_r50_voc.yaml) | [MMSegmentation][open-mmlab/mmsegmentation] · Apache-2.0 | Checkpoint-specific terms not established | MMSeg backbone and decode head, variable spatial input |
+| [FCN-ResNet50](src/opennpu_quant/resources/models/fcn_r50_voc.yaml) | [MMSegmentation][open-mmlab/mmsegmentation] · Apache-2.0 | Checkpoint-specific terms not established | MMSeg backbone and decode head, fixed 512×512 input |
 | [Inception-V3](src/opennpu_quant/resources/models/inception_v3.yaml) | [torchvision][pytorch/vision] · BSD-3-Clause | Checkpoint-specific terms not established | Input transform in a host graph |
 | [MobileFaceNet ReLU (foamliu)](src/opennpu_quant/resources/models/mobilefacenet_relu_foamliu.yaml) | [MobileFaceNet][foamliu/MobileFaceNet] · Apache-2.0 | Checkpoint included in the Apache-2.0 source tree. No separate weight notice | Original ReLU network, no PReLU-to-ReLU replacement |
 | [MobileNetV1](src/opennpu_quant/resources/models/mobilenet_v1.yaml) | [timm][huggingface/pytorch-image-models] · Apache-2.0 | Apache-2.0 in the pinned model card | timm export with fixed-size SAME padding |
@@ -52,7 +52,7 @@ every historical asset.
 | [YOLOv5n](src/opennpu_quant/resources/models/yolov5n.yaml) | [YOLOv5][ultralytics/yolov5] · GPL-3.0 | Historical GPL source. Checkpoint scope still needs confirmation | Network and postprocess graphs |
 | [YOLOv5s](src/opennpu_quant/resources/models/yolov5s.yaml) | [YOLOv5][ultralytics/yolov5] · GPL-3.0 | Historical GPL source. Checkpoint scope still needs confirmation | Network and postprocess graphs |
 | [YOLOv5s-seg](src/opennpu_quant/resources/models/yolov5s_seg.yaml) | [YOLOv5][ultralytics/yolov5] · GPL-3.0 | Historical GPL source. Checkpoint scope still needs confirmation | Detection and prototype outputs, separate detection postprocess graph |
-| [YOLOv7-face](src/opennpu_quant/resources/models/yolov7_face.yaml) | [YOLOv7-face][lucasjinreal/yolov7-face] · Darknet notice only | Mixed upstream provenance. Weight terms not established | Variable spatial input, constant/broadcast rewrites, separate postprocess graph |
+| [YOLOv7-face](src/opennpu_quant/resources/models/yolov7_face.yaml) | [YOLOv7-face][lucasjinreal/yolov7-face] · Darknet notice only | Mixed upstream provenance. Weight terms not established | Fixed 640×640 input, constant/broadcast rewrites, separate postprocess graph |
 | [YOLOv7-tiny](src/opennpu_quant/resources/models/yolov7_tiny.yaml) | [YOLOv7][WongKinYiu/yolov7] · GPL-3.0 notice in a subsequent revision with identical executable code, as detailed below | Checkpoint applicability and source-distribution obligations need confirmation | Network and postprocess graphs |
 | [YOLOv8n](src/opennpu_quant/resources/models/yolov8n.yaml) | [Ultralytics][ultralytics/ultralytics] · AGPL-3.0 | Provider offers AGPL-3.0 and separate Enterprise terms. No Enterprise grant recorded | Network and postprocess graphs |
 | [YOLOX](src/opennpu_quant/resources/models/yolox.yaml) | [YOLOX][Megvii-BaseDetection/YOLOX] · Apache-2.0 | Checkpoint-specific terms not established | Decoded network outputs, separate postprocess graph |
@@ -129,6 +129,16 @@ The remaining rows marked "Checkpoint-specific terms not established" need
 weight-specific confirmation. Model and dataset terms are separate. Datasets
 are not included in the model archives.
 
+## Fixed-input side edition
+
+`v1.0.2-static.1` fixes the network input dimensions of YOLOX, YOLOv7-face and
+YOLOv5s-seg to 640×640, and DeepLabV3-ResNet50 and FCN-ResNet50 to 512×512.
+Converted Release graphs preserve nodes, weights and quantization encodings. The
+latter four models use the resize and padding policies in [the model
+reference](https://github.com/cap252/opennpu_quant/blob/v1.0.2-static.1/docs/model-reference.md).
+This conversion does not change the upstream notices or establish additional
+weight redistribution rights.
+
 ## Maintaining this record
 
 When adding or replacing a checkpoint, update its recipe and model row, retain
@@ -136,8 +146,8 @@ its upstream notice unchanged and record the source revision. Keep unresolved
 weight terms explicit. The model table and original texts are documentation,
 not an execution-time registry.
 
-The v1.0.2 model archives include this record and the original notices
-under `licenses/models/`.
+The v1.0.2-static.1 model archives include this record and the original
+notices under `licenses/models/`.
 
 [AlexeyAB/darknet]: https://github.com/AlexeyAB/darknet/tree/9d40b619756be9521bc2ccd81808f502daaa3e9a
 [biubug6/Pytorch_Retinaface]: https://github.com/biubug6/Pytorch_Retinaface/tree/b984b4b775b2c4dced95c1eadd195a5c7d32a60b

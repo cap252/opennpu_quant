@@ -21,7 +21,7 @@
     "family": "mmseg",
     "opset": 17,
     "simplify": false,
-    "dynamic_spatial": true,
+    "dynamic_spatial": false,
     "fixture_size": 512,
     "outputs": [
       "logits"
@@ -47,7 +47,7 @@
     "family": "mmseg",
     "opset": 17,
     "simplify": false,
-    "dynamic_spatial": true,
+    "dynamic_spatial": false,
     "fixture_size": 512,
     "outputs": [
       "logits"
@@ -269,7 +269,7 @@
     "family": "yolov5_seg",
     "opset": 17,
     "simplify": false,
-    "dynamic_spatial": true,
+    "dynamic_spatial": false,
     "fixture_size": 640,
     "outputs": [
       "predictions",
@@ -281,7 +281,7 @@
     "family": "yolov7_face",
     "opset": 17,
     "simplify": false,
-    "dynamic_spatial": true,
+    "dynamic_spatial": false,
     "fixture_size": 640,
     "outputs": [
       "predictions"
@@ -304,7 +304,7 @@
     "family": "yolox",
     "opset": 17,
     "simplify": false,
-    "dynamic_spatial": true,
+    "dynamic_spatial": false,
     "fixture_size": 640,
     "outputs": [
       "predictions"

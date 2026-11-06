@@ -16,6 +16,7 @@ Hash checks establish the identity and integrity of models, inputs and saved fil
 
 ## Known limitations
 
+- Fixed input dimensions do not guarantee fixed intermediate tensors or unchanged accuracy. The side release preserves the original INT8 encodings rather than recalibrating them for the new preprocessing. Compare FP32 and INT8 under the same input policy.
 - [Export checks](models-and-data.md#export-fp32-onnx) record finite framework differences in both validation modes. Export success does not establish numerical agreement or accuracy.
 - AdaRound compares Torch and ONNX Runtime layer outputs. `strict` stops on tolerance violations, while `functional` records finite differences.
 - Matching CUDA package versions does not guarantee bitwise-equal results.

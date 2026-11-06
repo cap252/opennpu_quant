@@ -1,5 +1,5 @@
 {
-  "source": "selected FP32 ONNX graph inputs; SHA256 verified",
+  "source": "v1.0.2-static.1 converted Release FP32 network inputs. File hashes and all input dimensions verified.",
   "models": [
     {
       "model": "resnet18",
@@ -28,7 +28,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/01/batch1_default/final/model.onnx",
+        "path": "models/resnet18/fp32/network.onnx",
         "sha256": "5c38ee32927dd92ff100cdebb0d359787362f6eee2089679719114cc673a1c44"
       }
     },
@@ -59,7 +59,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/02/batch1_default/final/model.onnx",
+        "path": "models/resnet50/fp32/network.onnx",
         "sha256": "1e0c942d16ff8f618038b2f0e73c6420c29e6e3b7ad584ca85e5a72930c956a2"
       }
     },
@@ -90,7 +90,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/03/batch1_default/final/model.onnx",
+        "path": "models/resnet101/fp32/network.onnx",
         "sha256": "9735a76ec96662c20cd05a2196e92c109f6bf618abe954f7e287fb58d6a89d57"
       }
     },
@@ -121,7 +121,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/04/batch1_default/final/model.onnx",
+        "path": "models/mobilenet_v1/fp32/network.onnx",
         "sha256": "21e73ffbbd81d07fa1626dedf45c85ee7384aea53e345ffac3068ff22038478e"
       }
     },
@@ -152,7 +152,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/05/batch1_default/final/model.onnx",
+        "path": "models/mobilenet_v2/fp32/network.onnx",
         "sha256": "2b30bccb3cf9bc419655d80aa3ba941b6471ccc43385b6a7fd811ad3f8a27454"
       }
     },
@@ -183,7 +183,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/06/batch1_default/final/model.onnx",
+        "path": "models/mobilenet_v3_large/fp32/network.onnx",
         "sha256": "f62c38daa8ef19b93a2c0aad6e48c1d45dd400b0999ed3eab3342c7309531e42"
       }
     },
@@ -214,7 +214,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/07/batch1_default/final/model.onnx",
+        "path": "models/efficientnet_b0/fp32/network.onnx",
         "sha256": "7ba8976263aa74add03ee05e59004b8dabf3a57c7698d48820b6cf73a7273f70"
       }
     },
@@ -245,7 +245,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/08/batch1_default/final/model.onnx",
+        "path": "models/efficientnet_lite4/fp32/network.onnx",
         "sha256": "f5147a1a46a4b335342deab8c1f94e5e3c1b33672424afbf06460a88cbc4eb6f"
       }
     },
@@ -276,7 +276,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/09/batch1_default/final/model.onnx",
+        "path": "models/squeezenet1_1/fp32/network.onnx",
         "sha256": "36af4776bd69a89c787f2d477e8294e2fb82ab312e29ffed0a1fc2f18a54e02c"
       }
     },
@@ -307,7 +307,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/10/batch1_default/final/model.onnx",
+        "path": "models/shufflenet_v2_x1_0/fp32/network.onnx",
         "sha256": "5041f045494880c474fcdabc599647dee3086898da6615567bfacd87ddd86a35"
       }
     },
@@ -338,7 +338,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/models/11/batch1_default/final/model.onnx",
+        "path": "models/vgg16/fp32/network.onnx",
         "sha256": "ec771d25114f52451c0e387365b1d936d823f15a59cca8edb4639de757257177"
       }
     },
@@ -369,7 +369,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/12/network.onnx",
+        "path": "models/inception_v3/fp32/network.onnx",
         "sha256": "3480ddf2aada3a29fbe2325a853177798d2f38e60220ad39a898aec897617733"
       }
     },
@@ -400,7 +400,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/13/network.onnx",
+        "path": "models/yolov3_tiny/fp32/network.onnx",
         "sha256": "137c354060f872a487ccae2f534ffd10b945ce27f226c4a547c5c71063f52597"
       }
     },
@@ -431,7 +431,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/14/network.onnx",
+        "path": "models/yolov4_tiny/fp32/network.onnx",
         "sha256": "af395cec7c13b0d05ebce5d58cd1b989ca7988af25a9f9b6cb92c6f0b294140f"
       }
     },
@@ -462,7 +462,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/15/network.onnx",
+        "path": "models/yolov5n/fp32/network.onnx",
         "sha256": "89934fb986bee815917b20645bc1d3a0b2ff48350d5218bde1067b41d09e267f"
       }
     },
@@ -493,7 +493,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/16/network.onnx",
+        "path": "models/yolov5s/fp32/network.onnx",
         "sha256": "5db7ebf0ccb84303a92260626786ef4f3e3da542bc267b2234c7d0f7e31c5bc3"
       }
     },
@@ -524,7 +524,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/17/network.onnx",
+        "path": "models/yolov7_tiny/fp32/network.onnx",
         "sha256": "ff330e5f1d8b57d798f9f48da5638917fa46ff1e1f536a876763b38d30541f46"
       }
     },
@@ -555,7 +555,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/18/network.onnx",
+        "path": "models/yolov8n/fp32/network.onnx",
         "sha256": "94c5dc1ab8795053231c8e2bf1bb2bacd06120f34b3fd308bb46f2aa261aa28d"
       }
     },
@@ -586,7 +586,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/19/network.onnx",
+        "path": "models/ssd_mobilenet_v2_320/fp32/network.onnx",
         "sha256": "6f78b98944fa42e70fced186d59f5cc031f6f506275e1d52edfeb9c9a9d77b9b"
       }
     },
@@ -617,7 +617,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/20/network.onnx",
+        "path": "models/nanodet_plus_m_320/fp32/network.onnx",
         "sha256": "daa64a73ede6edd5f32aaf6cbc46ebcbaa8b403a14e755e60f933a6307032679"
       }
     },
@@ -648,7 +648,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/22/network.onnx",
+        "path": "models/retinanet_resnet50_fpn/fp32/network.onnx",
         "sha256": "111d2d554cfde2e26bdfde8215b572950697c06bbc290097bd49d7f09b1f458e"
       }
     },
@@ -672,15 +672,15 @@
           "shape": [
             1,
             3,
-            "height",
-            "width"
+            640,
+            640
           ],
           "layout": "NCHW"
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_recovery_20261008/assets/yolox/model.onnx",
-        "sha256": "4ef58d814663b4aa5e4cc7cbce3bdce13008c1e2e90da2f367529d84bf8721db"
+        "path": "models/yolox/fp32/network.onnx",
+        "sha256": "a2c165677cab8b3711e9fabe875f2bbb47e86b56a8b64d0a45239e1e4f431621"
       }
     },
     {
@@ -710,7 +710,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/27/network.onnx",
+        "path": "models/retinaface_mnet025_640/fp32/network.onnx",
         "sha256": "878110278abb73fc0745510567a6693b08bed80651a8c85719ab8798a37c54fc"
       }
     },
@@ -721,8 +721,8 @@
         "shape": [
           1,
           3,
-          "height",
-          "width"
+          640,
+          640
         ],
         "layout": "NCHW",
         "dtype": "float32"
@@ -734,15 +734,15 @@
           "shape": [
             1,
             3,
-            "height",
-            "width"
+            640,
+            640
           ],
           "layout": "NCHW"
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_face_lite_20261011/assets/yolov7_face/model.onnx",
-        "sha256": "69d9cb44f9f9d31b51782957fdd69b73c9eece24d814314c2269b38d8547de77"
+        "path": "models/yolov7_face/fp32/network.onnx",
+        "sha256": "4cead3534f06846998e2b2d209de50d9a8b8d848cfdb65370558fed14c5893f2"
       }
     },
     {
@@ -772,7 +772,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-repo/storage/artifacts/boundary_artifacts_v1/37/network.onnx",
+        "path": "models/deeplabv3_mnv2_voc/fp32/network.onnx",
         "sha256": "2db575667473ba0971cea90e099893909da7c371b6276412e593f66da016688f"
       }
     },
@@ -803,7 +803,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_recovery_20261008/assets/unet_resnet50_voc/model.onnx",
+        "path": "models/unet_resnet50_voc/fp32/network.onnx",
         "sha256": "fe2c73ec6240b7806973b2da9a724b96c4a4403f271580fa3d5f8522cb8f1113"
       }
     },
@@ -814,8 +814,8 @@
         "shape": [
           1,
           3,
-          "height",
-          "width"
+          512,
+          512
         ],
         "layout": "NCHW",
         "dtype": "float32"
@@ -827,15 +827,15 @@
           "shape": [
             1,
             3,
-            "height",
-            "width"
+            512,
+            512
           ],
           "layout": "NCHW"
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_20261005/assets/deeplabv3_r50_voc/model.onnx",
-        "sha256": "ee4a4f757926268a10a4eba83a1398bc194ac4ae04ff5cb7ac4c226ecede55d2"
+        "path": "models/deeplabv3_r50_voc/fp32/network.onnx",
+        "sha256": "a6ceacd70ebf88be4275bd241b9102b11047c210341d0cc70b3bf102a738c21e"
       }
     },
     {
@@ -845,8 +845,8 @@
         "shape": [
           1,
           3,
-          "height",
-          "width"
+          512,
+          512
         ],
         "layout": "NCHW",
         "dtype": "float32"
@@ -858,15 +858,15 @@
           "shape": [
             1,
             3,
-            "height",
-            "width"
+            512,
+            512
           ],
           "layout": "NCHW"
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_recovery_20261008/assets/fcn_r50_voc/model.onnx",
-        "sha256": "800cb929044f0b9213d80cdb9fdaec67260e1314afe95a0f1e2ddf13b78c5c06"
+        "path": "models/fcn_r50_voc/fp32/network.onnx",
+        "sha256": "60360e7d5a17f6ba555cc6a08039ec4a03033853b7810648d0bad294a136ee3f"
       }
     },
     {
@@ -876,8 +876,8 @@
         "shape": [
           1,
           3,
-          "height",
-          "width"
+          640,
+          640
         ],
         "layout": "NCHW",
         "dtype": "float32"
@@ -889,15 +889,15 @@
           "shape": [
             1,
             3,
-            "height",
-            "width"
+            640,
+            640
           ],
           "layout": "NCHW"
         }
       ],
       "network": {
-        "id": "artifact://research-runs/adaround_cnn33_recovery_20261008/assets/yolov5s_seg/model.onnx",
-        "sha256": "3b7248ebaf9c35eafb6382935704c4a8f0f87af29292df2ddaa53a0b9a009fd9"
+        "path": "models/yolov5s_seg/fp32/network.onnx",
+        "sha256": "d7ababd046aa8b8ec23e4f2958fc678861fcb2dba11e22fb1c81dca8c0ddeee5"
       }
     },
     {
@@ -927,7 +927,7 @@
         }
       ],
       "network": {
-        "id": "artifact://research-runs/mobilefacenet_relu_20261014/assets/mobilefacenet_relu_foamliu/model.onnx",
+        "path": "models/mobilefacenet_relu_foamliu/fp32/network.onnx",
         "sha256": "76b19bfa5fcda1c869d31a6d660e55065b5d4df997f643c1afdae6244d0fd115"
       }
     }

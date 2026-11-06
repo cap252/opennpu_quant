@@ -1,5 +1,7 @@
 # opennpu-quant
 
+This is the fixed-input side edition, targeting release `v1.0.2-static.1` and package version `1.0.2+static.1`. All 271 supplied network models have fixed input dimensions. YOLOX, YOLOv7-face and YOLOv5s-seg use 640×640. DeepLabV3-ResNet50 and FCN-ResNet50 use 512×512. Other model inputs are unchanged. See the [input policies](docs/model-reference.md#notes-on-specific-models).
+
 opennpu-quant turns FP32 ONNX models into INT8 QDQ models, with optional power-of-two scales and AdaRound, and measures their accuracy against FP32. The default `core10` group covers 10 models, and `cnn30` covers 30 across classification, object and face detection, semantic and instance segmentation, and face verification.
 
 Preprocessing prepares network inputs. Calibration collects FP32 activation statistics, and quantization builds the INT8 graph. Network outputs pass through postprocessing and task evaluation, then a report pairs INT8 with FP32 to calculate recovery. An evaluation config lets `run` use existing ONNX models without calibration or training. [Architecture](docs/architecture.md) explains the stages.
@@ -37,15 +39,15 @@ The demo calibrates, quantizes and evaluates a small built-in model without down
 
 ### 2. Check supplied ONNX models
 
-Use the core10 archive for [opennpu_quant v1.0.2](https://github.com/cap252/opennpu_quant/releases/tag/v1.0.2). If you received the archives directly, skip the download command and verify them before extraction. Run these commands from the repository root:
+Use the core10 archive for the [fixed-input side release v1.0.2-static.1](https://github.com/cap252/opennpu_quant/releases/tag/v1.0.2-static.1). If you received the archives directly, skip the download command and verify them before extraction. Do not substitute the standard release catalog for this edition. Run these commands from the repository root:
 
 ```bash
-curl -fL -O https://github.com/cap252/opennpu_quant/releases/download/v1.0.2/cnn30-core10-01-of-01.tar.gz &&
-  sha256sum --check --ignore-missing release-v1.0.2.sha256 &&
-  tar -xzf cnn30-core10-01-of-01.tar.gz
+curl -fL -O https://github.com/cap252/opennpu_quant/releases/download/v1.0.2-static.1/cnn30-static-core10-01-of-01.tar.gz &&
+  sha256sum --check --ignore-missing release-v1.0.2-static.1.sha256 &&
+  tar -xzf cnn30-static-core10-01-of-01.tar.gz
 ```
 
-The repository’s [checksum list](release-v1.0.2.sha256) verifies the downloaded archives before extraction. Stop if verification fails. This creates `bundle/`, which Git ignores, with the core10 models and evaluation configs. To keep the bundle elsewhere, run these commands in that directory with the path to the checksum list, and pass that location's `bundle/configs/` files to `-c`. The additional20 archives are not needed for core10.
+The repository’s [checksum list](release-v1.0.2-static.1.sha256) verifies the downloaded archives before extraction. Stop if verification fails. This creates `bundle/`, which Git ignores, with the core10 models and evaluation configs. To keep the bundle elsewhere, run these commands in that directory with the path to the checksum list, and pass that location's `bundle/configs/` files to `-c`. The additional20 archives are not needed for core10.
 
 Prepare ImageNet and COCO using the [dataset layouts](docs/models-and-data.md#prepare-datasets). Replace the source paths below with your own. Preparation checks calibration inputs and the full validation sets, even for a short evaluation. The evaluation itself performs no calibration or training.
 
@@ -69,19 +71,19 @@ Add `--dry-run` to check model and data readiness without inference. Evaluation 
 
 ### 3. Evaluate all selected conditions
 
-Download all three additional20 archives from the same release and extract them alongside core10:
+Download all three additional20 archives from the same side release and place them alongside core10. If you received them directly, skip the download loop. Verify all four parts and extract them into the same directory:
 
 ```bash
 (
   for part in 01 02 03
   do
-    archive="cnn30-additional20-${part}-of-03.tar.gz"
-    curl -fL -O "https://github.com/cap252/opennpu_quant/releases/download/v1.0.2/$archive" || exit 1
+    archive="cnn30-static-additional20-${part}-of-03.tar.gz"
+    curl -fL -O "https://github.com/cap252/opennpu_quant/releases/download/v1.0.2-static.1/$archive" || exit 1
   done
-  sha256sum --check --ignore-missing release-v1.0.2.sha256 || exit 1
+  sha256sum --check release-v1.0.2-static.1.sha256 || exit 1
   for part in 01 02 03
   do
-    tar -xzf "cnn30-additional20-${part}-of-03.tar.gz" || exit 1
+    tar -xzf "cnn30-static-additional20-${part}-of-03.tar.gz" || exit 1
   done
 )
 ```

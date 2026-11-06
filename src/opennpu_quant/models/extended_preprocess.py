@@ -11,12 +11,76 @@ KINDS = {
     "mmseg_resize",
     "yolox",
     "letterbox_dynamic",
+    "mmseg_letterbox",
+    "yolov5_letterbox",
+    "yolov7_letterbox",
 }
+
+
+def _fixed_letterbox(image, cfg):
+    """Fixed evaluation inputs with source-specific resize and padding arithmetic."""
+    import cv2
+
+    size = cfg["size"]
+    if type(size) is not int or size < 1:
+        raise ValueError("Fixed letterbox size must be a positive integer")
+    kind = cfg["kind"]
+    if kind != "mmseg_letterbox" and size % 32:
+        raise ValueError("YOLO letterbox size must be a multiple of 32")
+    width, height = image.size
+    ratio = size / max(width, height)
+    if kind == "yolov5_letterbox":
+        nw, nh = int(width * ratio), int(height * ratio)
+        interpolation = cv2.INTER_LINEAR if ratio > 1 else cv2.INTER_AREA
+    elif kind == "yolov7_letterbox":
+        nw, nh = round(width * ratio), round(height * ratio)
+        interpolation = cv2.INTER_LINEAR
+    else:
+        nw, nh = int(width * ratio + 0.5), int(height * ratio + 0.5)
+        interpolation = cv2.INTER_LINEAR
+    if min(nw, nh) < 1:
+        raise ValueError("Image aspect ratio produces an empty resized dimension")
+    pixels = cv2.resize(
+        np.asarray(image.convert("RGB")), (nw, nh), interpolation=interpolation
+    )
+    meta = dict(
+        original_size=[width, height], input_size=[size, size], valid_size=[nw, nh]
+    )
+    if kind == "mmseg_letterbox":
+        pixels = (
+            pixels.astype(np.float32) - np.array([123.675, 116.28, 103.53], np.float32)
+        ) / np.array([58.395, 57.12, 57.375], np.float32)
+        # MMSeg pads normalized tensors on the right and bottom with zero.
+        canvas = np.zeros((size, size, 3), np.float32)
+        canvas[:nh, :nw] = pixels
+        meta.update(scale=[nw / width, nh / height], pad=[0, 0])
+    else:
+        dw, dh = (size - nw) / 2, (size - nh) / 2
+        canvas = (
+            cv2.copyMakeBorder(
+                pixels,
+                round(dh - 0.1),
+                round(dh + 0.1),
+                round(dw - 0.1),
+                round(dw + 0.1),
+                cv2.BORDER_CONSTANT,
+                value=(114, 114, 114),
+            ).astype(np.float32)
+            / 255
+        )
+        gain = nh / height if kind == "yolov5_letterbox" else ratio
+        meta.update(scale=[gain, gain], pad=[dw, dh])
+        if kind == "yolov7_letterbox":
+            # scale_coords reconstructs padding before resized pixels are rounded.
+            meta["pad"] = [(size - width * ratio) / 2, (size - height * ratio) / 2]
+    return np.ascontiguousarray(canvas.transpose(2, 0, 1)[None]), meta
 
 
 def preprocess(image, cfg):
     import cv2
 
+    if cfg["kind"] in {"mmseg_letterbox", "yolov5_letterbox", "yolov7_letterbox"}:
+        return _fixed_letterbox(image, cfg)
     width, height = image.size
     meta = dict(original_size=[width, height], scale=[1.0, 1.0], pad=[0, 0])
     pixels = np.asarray(image.convert("RGB"))

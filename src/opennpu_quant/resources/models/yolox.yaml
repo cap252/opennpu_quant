@@ -42,7 +42,7 @@ export:
   family: yolox
   opset: 17
   simplify: false
-  dynamic_spatial: true
+  dynamic_spatial: false
   fixture_size: 640
   outputs:
   - predictions

@@ -284,14 +284,26 @@ class Cnn30Tests(unittest.TestCase):
 
         # The short edge is 304.64 pixels: flooring before stride rounding would
         # incorrectly select 320 instead of 352, and odd padding needs halves.
-        cfg = ModelSpec.load("yolov5s_seg").recipe["preprocess"]
+        cfg = dict(
+            kind="letterbox_dynamic",
+            size=640,
+            stride=32,
+            pad_value=114,
+            rectangular=True,
+        )
         feed, meta = preprocess(Image.new("RGB", (1000, 476)), cfg, "NCHW")
         self.assertEqual((1, 3, 352, 672), feed.shape)
         self.assertEqual([16.0, 24.0], meta["pad"])
         self.assertEqual([304 / 476, 304 / 476], meta["scale"])
         _, meta = preprocess(Image.new("RGB", (1000, 477)), cfg, "NCHW")
         self.assertEqual([16.0, 23.5], meta["pad"])
-        cfg = ModelSpec.load("yolov7_face").recipe["preprocess"]
+        cfg = dict(
+            kind="letterbox_dynamic",
+            size=640,
+            stride=32,
+            pad_value=114,
+            rectangular=False,
+        )
         _, meta = preprocess(Image.new("RGB", (1000, 479)), cfg, "NCHW")
         expected = np.array([[20, 30, 100, 120]], np.float32)
         boxes = np.array([[20, 30, 120, 150]], np.float32) * 0.64

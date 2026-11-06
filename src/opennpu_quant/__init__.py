@@ -1,4 +1,4 @@
-__version__ = "1.0.2"
+__version__ = "1.0.2+static.1"
 _EXPORTS = {
     "OrtConfig": ("ort.config", "OrtConfig"),
     "Scheme": ("quant.scheme", "Scheme"),

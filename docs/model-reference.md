@@ -13,10 +13,10 @@ The cnn30 task counts are 12 classification, 10 object detection, 2 face detecti
 
 ## How to read the tables
 
-The shapes come from the verified FP32 ONNX files. [`model-inputs.json`](model-inputs.json) records the graph IDs and hashes. For a model you export yourself, check its `model.json` and ONNX inputs.
+The shapes come from the verified FP32 ONNX files. [`model-inputs.json`](model-inputs.json) records the bundle paths and hashes. For a model you export yourself, check its `model.json` and ONNX inputs.
 
 - **Recipe input** is the output of Python preprocessing. **Network input** is the actual feed after any CPU pre graph and input mapping. All network feeds are float32, and shapes include batch 1.
-- `f32` is float32, `u8` is uint8, and H/W are symbolic spatial dimensions. When a recipe does not declare a dtype, the external dtype comes from the preprocessing implementation.
+- `f32` is float32, `u8` is uint8, and all supplied network input dimensions are fixed. When a recipe does not declare a dtype, the external dtype comes from the preprocessing implementation.
 - In the host column, `pre` and `post` are CPU ONNX graphs. Python decoders and evaluators run in addition to them.
 - The last column lists the CPU host graphs, decoder kind and default evaluation profile. [Evaluation profiles](evaluation-profiles.md#default-profile-per-model) explains the behavior selected by each profile.
 - ImageNet mean/std is `[0.485,0.456,0.406]` / `[0.229,0.224,0.225]`. MMSeg uses `[123.675,116.28,103.53]` / `[58.395,57.12,57.375]`. NanoDet uses BGR `[103.53,116.28,123.675]` / `[57.375,57.12,58.395]`, divided by 255 in the original order.
@@ -55,7 +55,7 @@ Dataset COCO, metrics AP, AP50 and AP75.
 | `ssd_mobilenet_v2_320` | core10 | 1×320×320×3 / u8 / NHWC | 1×3×300×300 / f32 / NCHW | Fixed | RGB resize, uint8 → CPU pre graph | pre/post / `tf_od_api` / `tf_od_api_v1` |
 | `nanodet_plus_m_320` | cnn30 additional | 1×3×320×320 / f32 / NCHW | 1×3×320×320 / f32 / NCHW | Fixed | BGR warpPerspective, /255, then normalize with mean/255 and std/255 | post / `nanodet` / `nanodet_v1` |
 | `retinanet_resnet50_fpn` | cnn30 additional | 1×3×800×800 / f32 / NCHW | 1×3×800×800 / f32 / NCHW | Fixed | RGB 800² stretch resize, /255 | pre/post / `retinanet` / `retinanet_host_nms_v1` |
-| `yolox` | cnn30 additional | 1×3×640×640 / f32 / NCHW | 1×3×H×W / f32 / NCHW | Variable ONNX / fixed 640 feed | BGR keep-ratio, top-left placement, pad114, 0–255 float32 | post / `yolo` / `yolox_torch_nms_v1` |
+| `yolox` | cnn30 additional | 1×3×640×640 / f32 / NCHW | 1×3×640×640 / f32 / NCHW | Fixed | BGR keep-ratio, top-left placement, pad114, 0–255 float32 | post / `yolo` / `yolox_torch_nms_v1` |
 
 ## Face detection
 
@@ -64,7 +64,7 @@ Dataset WIDER FACE, primary metric AP_medium.
 | Model ID | Group | Recipe input shape / dtype / layout | Actual network shape / dtype / layout | Spatial dimensions / feed | Preprocessing | CPU host / decoder / profile |
 |---|---|---|---|---|---|---|
 | `retinaface_mnet025_640` | core10 | 1×3×640×640 / f32 / NCHW | 1×3×640×640 / f32 / NCHW | Fixed | BGR resize, subtract mean[104,117,123] | post / `retinaface` / `retinaface_v1` |
-| `yolov7_face` | cnn30 additional | 1×3×H×W / f32 / NCHW | 1×3×H×W / f32 / NCHW | Variable ONNX / variable feed | RGB stride32 letterbox, /255, auto padding | post / `yolo_face` / `yolov7_face_clip_first4_v1` |
+| `yolov7_face` | cnn30 additional | 1×3×640×640 / f32 / NCHW | 1×3×640×640 / f32 / NCHW | Fixed | RGB keep-ratio resize, centered pad114 to 640², /255 | post / `yolo_face` / `yolov7_face_clip_first4_v1` |
 
 ## Semantic segmentation
 
@@ -74,8 +74,8 @@ Dataset VOC2012, metric mIoU. Pixel accuracy, the evaluated class count and per-
 |---|---|---|---|---|---|---|
 | `deeplabv3_mnv2_voc` | core10 | 1×513×513×3 / f32 / NHWC | 1×513×513×3 / f32 / NHWC | Fixed | long side 513, (RGB−127.5)/127.5, bottom/right 0 pad | post / `segmentation_labels` / `segmentation_labels_v1` |
 | `unet_resnet50_voc` | cnn30 additional | 1×3×512×512 / f32 / NCHW | 1×3×512×512 / f32 / NCHW | Fixed | BICUBIC letterbox512, pad128, /255 | none / `segmentation_resize` / `segmentation_resize_v1` |
-| `deeplabv3_r50_voc` | cnn30 additional | 1×3×H×W / f32 / NCHW | 1×3×H×W / f32 / NCHW | Variable ONNX / variable feed | RGB keep-ratio ≤2048×512, mean/std(0–255) | none / `segmentation_resize` / `segmentation_resize_v1` |
-| `fcn_r50_voc` | cnn30 additional | 1×3×H×W / f32 / NCHW | 1×3×H×W / f32 / NCHW | Variable ONNX / variable feed | RGB keep-ratio ≤2048×512, mean/std(0–255) | none / `segmentation_resize` / `segmentation_resize_v1` |
+| `deeplabv3_r50_voc` | cnn30 additional | 1×3×512×512 / f32 / NCHW | 1×3×512×512 / f32 / NCHW | Fixed | RGB keep-ratio fit512, mean/std(0–255), bottom/right normalized-zero pad | none / `segmentation_resize` / `segmentation_resize_v1` |
+| `fcn_r50_voc` | cnn30 additional | 1×3×512×512 / f32 / NCHW | 1×3×512×512 / f32 / NCHW | Fixed | RGB keep-ratio fit512, mean/std(0–255), bottom/right normalized-zero pad | none / `segmentation_resize` / `segmentation_resize_v1` |
 
 ## Instance segmentation
 
@@ -83,7 +83,7 @@ Dataset COCO, metric mask_AP. Box AP and mask AP are separate metrics.
 
 | Model ID | Group | Recipe input shape / dtype / layout | Actual network shape / dtype / layout | Spatial dimensions / feed | Preprocessing | CPU host / decoder / profile |
 |---|---|---|---|---|---|---|
-| `yolov5s_seg` | cnn30 additional | 1×3×H×W / f32 / NCHW | 1×3×H×W / f32 / NCHW | Variable ONNX / variable feed | RGB stride32 letterbox, /255, rectangular | post / `yolo_seg` / `yolov5_seg_scaled_coeff_bbox_area_v1` |
+| `yolov5s_seg` | cnn30 additional | 1×3×640×640 / f32 / NCHW | 1×3×640×640 / f32 / NCHW | Fixed | RGB keep-ratio resize, centered pad114 to 640², /255 | post / `yolo_seg` / `yolov5_seg_scaled_coeff_bbox_area_v1` |
 
 ## Face verification
 
@@ -106,7 +106,7 @@ Dataset LFW, metric verification_accuracy.
 | RetinaFace | 0.02 / 0.4 / 750 | Recipe priors/min_sizes/steps/variance and thresholds. Medium is the primary WIDER easy/medium/hard metric |
 | SSD / RetinaNet | TopK/NMS inside the host graph | Python validates/restores coordinates and valid COCO categories. It does not add arbitrary NMS or fill missing slots |
 | U-Net | softmax → padding crop → bilinear → argmax | Fixed in the Python decoder. VOC mIoU with the ignore label preserved |
-| 2 MMSeg models | bilinear to input size, then to original size → argmax | `align_corners=False`, fixed in the Python decoder. VOC mIoU |
+| 2 MMSeg models | bilinear to input canvas → crop padding → bilinear to original size → argmax | `align_corners=False`, fixed in the Python decoder. VOC mIoU |
 | TF DeepLab | host labels → crop valid area → restore labels | Do not replace label-map resizing with logit resizing |
 | MobileFaceNet ReLU | sum original+flip embeddings → FP32 L2 normalization | Ten-fold threshold selection for `verification_accuracy`, plus `fixed_angle_accuracy` at 74.18°. Requires all 6,000 pairs ([LFW](models-and-data.md#lfw)) |
 
@@ -116,7 +116,7 @@ Values described as fixed cannot be overridden from YAML or the CLI. The NMS det
 
 - **SSD:** the recipe input differs from the network input, as the detection table shows. The TF host graphs handle resizing, normalization and detection output restoration, so keep their connections intact.
 - **InceptionV3 and RetinaNet:** the bundles include CPU pre graphs. Equal external and network shapes do not mean the graph does nothing, so keep the input mapping.
-- **Variable inputs:** YOLOv5s-seg rounds to multiples of the stride with rectangular padding, so the longer side can exceed 640. YOLOv7-face uses its own automatic padding, and MMSeg input sizes depend on the aspect ratio. Five networks have symbolic dimensions, including YOLOX, and four of them receive variable-size feeds.
+- **Fixed inputs:** YOLOX retains its 640×640 BGR input policy. YOLOv7-face and YOLOv5s-seg fit images inside 640×640 with centered padding. DeepLabV3-ResNet50 and FCN-ResNet50 fit images inside 512×512 and pad the bottom and right after normalization. Boxes remove the corresponding scale and padding. MMSeg restores logits to the input canvas, removes padding, resizes to the original image and then takes argmax. Internal tensors and detection outputs may still have symbolic dimensions.
 - **Preprocessing arithmetic:** NanoDet divides before normalizing and YOLOv4-Tiny promotes coordinates to FP64. These orders preserve the original input bytes and predictions, so keep them even where an algebraically equal form exists.
 - **MobileFaceNet on LFW:** besides the primary `verification_accuracy`, the full LFW evaluation reports `fixed_angle_accuracy`, which predicts the same identity when the angle between the two embeddings is at most 74.18°. The threshold is recorded as `metric_details.fixed_angle_threshold_degrees`. The calculation normalizes rows in FP32 and compares the angles in FP64, matching the original evaluation order.
 - **Published accuracy:** FP32 accuracy is measured with each model's packaged preprocessing and evaluation, so it can differ from the number published for a checkpoint. Published numbers are not acceptance targets, and recovery always compares INT8 with this FP32 result. Most models come close to their published numbers. Known differences in the evaluation conditions can contribute to the larger gaps: RetinaNet and RetinaFace resize to a fixed square instead of the source evaluation geometry, TF DeepLab-MobileNetV2 uses PIL resizing and its own label restoration, and MobileFaceNet pins a state dict and uses its own alignment and threshold selection. The effect of each difference on accuracy has not been measured separately. The published YOLOv7-Tiny number belongs to a different variant (SiLU, while the checkpoint used here is LeakyReLU), and no matching published number was found for YOLOv3-Tiny.
@@ -124,6 +124,8 @@ Values described as fixed cannot be overridden from YAML or the CLI. The NMS det
 <a id="original-per-model-settings"></a>
 
 ## Per-model settings
+
+The side-release ONNX models retain the original weights and quantization encodings. The four changed preprocessing policies can change FP32 and INT8 accuracy. Evaluate both with the same fixed policy before calculating recovery. New generation runs calibrate and train using the fixed policy, so their quantized weights can differ from these converted Release models.
 
 The table lists the selected percentiles and the recorded training settings. The core10 and cnn30 generation presets contain explicit per-condition percentiles. Release evaluation configs select already generated ONNX candidates. The `core10` and `cnn30` presets use the listed percentiles, calibration counts and AdaRound hyperparameters, but use a 6 GiB ORT GPU limit, a 512 MiB AdaRound window and training device `auto` for every model.
 
